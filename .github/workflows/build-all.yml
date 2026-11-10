@@ -1,0 +1,67 @@
+name: Build APK Android & IPA iOS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Compilar APK Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Instalar Dependencias Flutter
+        run: |
+          cd mobile-app
+          flutter pub get
+
+      - name: Compilar APK Release
+        run: |
+          cd mobile-app
+          flutter build apk --release
+
+      - name: Disponibilizar APK para Download Direto
+        uses: actions/upload-artifact@v4
+        with:
+          name: AoFrioTester-Android-APK
+          path: mobile-app/build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    name: Compilar iOS (TestFlight / IPA)
+    runs-on: macos-14
+    steps:
+      - name: Checkout do Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Instalar Dependencias
+        run: |
+          cd mobile-app
+          flutter pub get
+
+      - name: Compilar iOS (sem assinatura para artifact ou TestFlight se secrets configurados)
+        run: |
+          cd mobile-app
+          flutter build ios --release --no-codesign

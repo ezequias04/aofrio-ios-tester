@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AoFrio Mobile App - Protótipo de Telas</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* Estilo Obsidian / Dark Neumorphism inspirado nas imagens */
+    body {
+      background: radial-gradient(circle at 50% 20%, #1e1b2e 0%, #0d0c14 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    
+    .obsidian-card {
+      background: #181622;
+      box-shadow: 
+        8px 8px 20px rgba(0, 0, 0, 0.6),
+        -4px -4px 15px rgba(255, 255, 255, 0.03),
+        inset 0 1px 1px rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .obsidian-card-active {
+      background: #1e1b2e;
+      box-shadow: 
+        inset 4px 4px 10px rgba(0, 0, 0, 0.6),
+        inset -2px -2px 8px rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .neon-purple-glow {
+      box-shadow: 0 0 25px rgba(168, 85, 247, 0.45);
+    }
+
+    .neon-cyan-glow {
+      box-shadow: 0 0 25px rgba(6, 182, 212, 0.45);
+    }
+
+    .dial-outer {
+      background: radial-gradient(circle, #1a1727 60%, #12101b 100%);
+      box-shadow: 
+        15px 15px 30px rgba(0, 0, 0, 0.8),
+        -8px -8px 20px rgba(255, 255, 255, 0.03);
+    }
+
+    .dial-inner {
+      background: radial-gradient(circle, #231f36 0%, #14121f 100%);
+      box-shadow: 
+        inset 6px 6px 15px rgba(0, 0, 0, 0.9),
+        inset -3px -3px 8px rgba(255, 255, 255, 0.05);
+    }
+
+    /* Esconde barra de rolagem */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="text-slate-100 flex items-center justify-center min-h-screen p-4 md:p-8">
+
+  <!-- Moldura de Smartphone (Mobile Preview) -->
+  <div class="w-full max-w-[410px] h-[850px] bg-[#0f0e17] rounded-[48px] p-3 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] border-[6px] border-[#292639] relative flex flex-col overflow-hidden">
+    
+    <!-- Notch / Dynamic Island -->
+    <div class="w-28 h-5 bg-black rounded-full mx-auto mb-2 flex items-center justify-end px-3">
+      <div class="w-2.5 h-2.5 rounded-full bg-slate-900 border border-slate-700"></div>
+    </div>
+
+    <!-- Barra de Status Superior do Celular -->
+    <div class="flex justify-between items-center px-6 text-xs text-slate-400 font-semibold mb-2">
+      <span>09:41</span>
+      <div class="flex items-center gap-1.5">
+        <i data-lucide="wifi" class="w-3.5 h-3.5"></i>
+        <i data-lucide="battery-charging" class="w-4 h-4 text-emerald-400"></i>
+      </div>
+    </div>
+
+    <!-- CONTEÚDO DAS TELAS (Alternado via Tabs) -->
+    <div class="flex-1 overflow-y-auto no-scrollbar px-4 pb-20 pt-1" id="screenContainer">
+
+      <!-- ================= TELA 1: DETALHE DO TESTE (OBSIDIAN DIAL) ================= -->
+      <section id="screenDial" class="space-y-5">
+        <!-- Topo com saudação e alerta -->
+        <div class="flex justify-between items-center">
+          <div>
+            <p class="text-[11px] font-bold tracking-wider text-purple-400 uppercase">AOFRIO SENSOR AUDIT</p>
+            <h2 class="text-xl font-bold text-white">Refrigerador #8821</h2>
+            <p class="text-xs text-slate-400">Meta: 3.0°C • Limite: 90 min</p>
+          </div>
+          <button class="w-10 h-10 rounded-2xl obsidian-card flex items-center justify-center text-purple-400">
+            <i data-lucide="bell" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- Mostrador Central Circular Estilo Obsidian Thermostat (Inspirado na imagem 3) -->
+        <div class="obsidian-card rounded-[36px] p-6 flex flex-col items-center relative overflow-hidden">
+          
+          <div class="relative w-56 h-56 rounded-full dial-outer flex items-center justify-center p-3 mb-4">
+            
+            <!-- Arco de Progresso Neon em SVG -->
+            <svg class="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 100 100">
+              <!-- Trilho de fundo -->
+              <circle cx="50" cy="50" r="42" stroke="#25213b" stroke-width="5" fill="none"/>
+              <!-- Arco resfriando (queda de temperatura) -->
+              <circle cx="50" cy="50" r="42" stroke="url(#neonGradient)" stroke-width="6" 
+                      stroke-dasharray="264" stroke-dashoffset="65" stroke-linecap="round" fill="none"/>
+              <defs>
+                <linearGradient id="neonGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#06b6d4" />
+                  <stop offset="60%" stop-color="#8b5cf6" />
+                  <stop offset="100%" stop-color="#d946ef" />
+                </linearGradient>
+              </defs>
+            </svg>
+
+            <!-- Disco Central com Temperatura -->
+            <div class="w-40 h-40 rounded-full dial-inner flex flex-col items-center justify-center text-center relative z-10">
+              <span class="text-xs text-cyan-400 font-bold uppercase tracking-wider flex items-center gap-1 mb-1">
+                <i data-lucide="snowflake" class="w-3.5 h-3.5 animate-spin text-cyan-400"></i> Pull-Down
+              </span>
+              <div class="flex items-baseline">
+                <span class="text-5xl font-black text-white tracking-tight" id="displayTemp">2.8</span>
+                <span class="text-xl font-bold text-purple-400 ml-1">°C</span>
+              </div>
+              <span class="text-[11px] text-emerald-400 font-semibold mt-1">● APROVADA</span>
+            </div>
+
+            <!-- Botões flutuantes de ajuste ao lado do dial (estilo Imagem 3) -->
+            <div class="absolute left-2 top-2 w-8 h-8 rounded-full obsidian-card flex items-center justify-center text-cyan-400 text-xs">
+              <i data-lucide="snowflake" class="w-4 h-4"></i>
+            </div>
+            <div class="absolute right-2 top-2 w-8 h-8 rounded-full obsidian-card flex items-center justify-center text-slate-400 text-xs">
+              <i data-lucide="fan" class="w-4 h-4"></i>
+            </div>
+          </div>
+
+          <!-- Veredito / Status Bar -->
+          <div class="w-full bg-[#110f1c] rounded-2xl p-3 border border-purple-900/40 flex items-center justify-between text-xs">
+            <span class="text-slate-400">Tempo de Resfriamento:</span>
+            <span class="text-purple-300 font-bold text-sm">54 min <span class="text-slate-500 font-normal">/ 90m</span></span>
+          </div>
+        </div>
+
+        <!-- Cards de Métricas em Grade (Estilo Imagem 3) -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="obsidian-card rounded-2xl p-4 flex flex-col justify-between">
+            <div class="flex justify-between items-center text-slate-400 mb-2">
+              <span class="text-xs font-medium">Temp. Inicial</span>
+              <i data-lucide="thermometer" class="w-4 h-4 text-rose-400"></i>
+            </div>
+            <p class="text-2xl font-bold text-white">26.8<span class="text-sm font-normal text-slate-400">°C</span></p>
+            <p class="text-[10px] text-slate-400 mt-1">Antes de fechar a porta</p>
+          </div>
+
+          <div class="obsidian-card rounded-2xl p-4 flex flex-col justify-between">
+            <div class="flex justify-between items-center text-slate-400 mb-2">
+              <span class="text-xs font-medium">Porta Fechada</span>
+              <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
+            </div>
+            <p class="text-2xl font-bold text-emerald-400">100%</p>
+            <p class="text-[10px] text-slate-400 mt-1">0 aberturas no ensaio</p>
+          </div>
+
+          <div class="obsidian-card rounded-2xl p-4 flex flex-col justify-between">
+            <div class="flex justify-between items-center text-slate-400 mb-2">
+              <span class="text-xs font-medium">Compressor</span>
+              <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i>
+            </div>
+            <p class="text-2xl font-bold text-cyan-400">Normal</p>
+            <p class="text-[10px] text-slate-400 mt-1">Sem quedas de tensão</p>
+          </div>
+
+          <div class="obsidian-card rounded-2xl p-4 flex flex-col justify-between">
+            <div class="flex justify-between items-center text-slate-400 mb-2">
+              <span class="text-xs font-medium">Taxa Queda</span>
+              <i data-lucide="trending-down" class="w-4 h-4 text-purple-400"></i>
+            </div>
+            <p class="text-2xl font-bold text-purple-400">0.44</p>
+            <p class="text-[10px] text-slate-400 mt-1">°C por minuto</p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================= TELA 2: LISTA DE MÚLTIPLOS SENSORES (SALA / FÁBRICA) ================= -->
+      <section id="screenFleet" class="space-y-4 hidden">
+        <div class="flex justify-between items-center">
+          <div>
+            <p class="text-[11px] font-bold tracking-wider text-purple-400 uppercase">DISPOSITIVOS PRÓXIMOS</p>
+            <h2 class="text-xl font-bold text-white">Sensores na Sala (3)</h2>
+          </div>
+          <button class="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold neon-purple-glow flex items-center gap-1.5">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Sync Todas
+          </button>
+        </div>
+
+        <p class="text-xs text-slate-400">O celular escuta todos os sensores ao mesmo tempo via BLE e baixa os históricos sequencialmente:</p>
+
+        <!-- Card Geladeira 1 -->
+        <div class="obsidian-card rounded-2xl p-4 border-l-4 border-l-emerald-500 relative cursor-pointer hover:border-purple-500 transition" onclick="showScreen('dial')">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">APROVADA</span>
+                <span class="text-xs text-slate-500">AoFrio #0041</span>
+              </div>
+              <h3 class="font-bold text-white text-base mt-1">GEL-METAFRIO-8821</h3>
+              <p class="text-xs text-slate-400">Vertical 450L • Ensaio 54m</p>
+            </div>
+            <div class="text-right">
+              <span class="text-2xl font-black text-emerald-400">2.8°C</span>
+              <p class="text-[10px] text-slate-500">Meta: 3.0°C</p>
+            </div>
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden mt-3">
+            <div class="bg-emerald-500 h-full w-full"></div>
+          </div>
+        </div>
+
+        <!-- Card Geladeira 2 -->
+        <div class="obsidian-card rounded-2xl p-4 border-l-4 border-l-cyan-500 relative cursor-pointer hover:border-purple-500 transition">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400">RESFRIANDO</span>
+                <span class="text-xs text-slate-500">AoFrio #0089</span>
+              </div>
+              <h3 class="font-bold text-white text-base mt-1">CERV-GELOPAR-402</h3>
+              <p class="text-xs text-slate-400">Cervejeira • 38 min decorridos</p>
+            </div>
+            <div class="text-right">
+              <span class="text-2xl font-black text-cyan-400">4.1°C</span>
+              <p class="text-[10px] text-slate-500">Meta: -2.0°C</p>
+            </div>
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden mt-3">
+            <div class="bg-cyan-500 h-full w-[65%]"></div>
+          </div>
+        </div>
+
+        <!-- Card Geladeira 3 (Defeito) -->
+        <div class="obsidian-card rounded-2xl p-4 border-l-4 border-l-rose-500 relative cursor-pointer hover:border-purple-500 transition">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold px-2 py-0.5 rounded bg-rose-500/20 text-rose-400">REPROVADA</span>
+                <span class="text-xs text-slate-500">AoFrio #0102</span>
+              </div>
+              <h3 class="font-bold text-white text-base mt-1">GEL-CONSUL-5510</h3>
+              <p class="text-xs text-slate-400">Expositor 300L • Limite Estourado</p>
+            </div>
+            <div class="text-right">
+              <span class="text-2xl font-black text-rose-400">11.5°C</span>
+              <p class="text-[10px] text-slate-500">Meta: 3.0°C</p>
+            </div>
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden mt-3">
+            <div class="bg-rose-500 h-full w-full"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TELA 3: GRÁFICO E ESTATÍSTICAS (ESTILO IMAGEM 1) ================= -->
+      <section id="screenStats" class="space-y-4 hidden">
+        <div>
+          <p class="text-[11px] font-bold tracking-wider text-purple-400 uppercase">ANÁLISE DE TEMPERATURA</p>
+          <h2 class="text-xl font-bold text-white">Curva de Pull-Down</h2>
+          <p class="text-xs text-slate-400">Queda minuto a minuto gravada pelo sensor</p>
+        </div>
+
+        <!-- Card do Gráfico (Chart.js) -->
+        <div class="obsidian-card rounded-3xl p-5">
+          <div class="flex justify-between items-center mb-4">
+            <span class="text-xs font-bold text-slate-300">GEL-METAFRIO-8821</span>
+            <span class="text-[11px] bg-purple-900/50 text-purple-300 px-2.5 py-1 rounded-lg border border-purple-700/50">Intervalo 2m</span>
+          </div>
+          <div class="h-52 w-full">
+            <canvas id="appChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Cards de Resumo Roxo (Inspirado nos cards duplos inferiores da Imagem 1) -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="rounded-3xl p-4 bg-gradient-to-br from-purple-700 to-indigo-900 text-white shadow-lg">
+            <div class="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center mb-2">
+              <i data-lucide="arrow-down" class="w-4 h-4"></i>
+            </div>
+            <p class="text-xs text-purple-200">Queda Total</p>
+            <p class="text-2xl font-black mt-1">-24.0°C</p>
+          </div>
+
+          <div class="rounded-3xl p-4 bg-gradient-to-br from-indigo-800 to-slate-900 text-white shadow-lg border border-indigo-700/30">
+            <div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center mb-2">
+              <i data-lucide="clock" class="w-4 h-4 text-purple-300"></i>
+            </div>
+            <p class="text-xs text-slate-300">Tempo de Prova</p>
+            <p class="text-2xl font-black mt-1">54 min</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- BARRA DE NAVEGAÇÃO INFERIOR COM BOTÃO CENTRAL FLUTUANTE (Inspirada na Imagem 1) -->
+    <div class="absolute bottom-2 left-4 right-4 h-16 bg-[#161424]/90 backdrop-blur-md rounded-3xl border border-white/5 flex items-center justify-around px-2 z-20">
+      
+      <!-- Tab 1: Dial / Ensaio Ativo -->
+      <button onclick="showScreen('dial')" id="navDial" class="flex flex-col items-center text-purple-400">
+        <i data-lucide="gauge" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold mt-1">Ensaio</span>
+      </button>
+
+      <!-- Tab 2: Gráficos -->
+      <button onclick="showScreen('stats')" id="navStats" class="flex flex-col items-center text-slate-500 hover:text-slate-300">
+        <i data-lucide="bar-chart-2" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold mt-1">Gráficos</span>
+      </button>
+
+      <!-- Botão Central Flutuante com Recorte de Destaque (Inspirado no botão roxo da Imagem 1) -->
+      <div class="-mt-8">
+        <button onclick="triggerDownloadAction()" class="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-500 to-cyan-400 p-0.5 shadow-[0_0_20px_rgba(168,85,247,0.6)] flex items-center justify-center active:scale-95 transition">
+          <div class="w-full h-full bg-[#120f21] rounded-full flex items-center justify-center text-white">
+            <i data-lucide="scan-line" class="w-6 h-6 text-purple-300 animate-pulse"></i>
+          </div>
+        </button>
+      </div>
+
+      <!-- Tab 3: Múltiplas Geladeiras -->
+      <button onclick="showScreen('fleet')" id="navFleet" class="flex flex-col items-center text-slate-500 hover:text-slate-300">
+        <i data-lucide="layers" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold mt-1">Geladeiras</span>
+      </button>
+
+      <!-- Tab 4: Configurações -->
+      <button onclick="alert('Configurações de limites e perfis de ensaio')" class="flex flex-col items-center text-slate-500 hover:text-slate-300">
+        <i data-lucide="settings" class="w-5 h-5"></i>
+        <span class="text-[10px] font-bold mt-1">Ajustes</span>
+      </button>
+
+    </div>
+
+  </div>
+
+  <script>
+    // Inicializa ícones Lucide
+    lucide.createIcons();
+
+    let chartAppInstance = null;
+
+    function showScreen(screen) {
+      document.getElementById('screenDial').classList.add('hidden');
+      document.getElementById('screenFleet').classList.add('hidden');
+      document.getElementById('screenStats').classList.add('hidden');
+
+      ['navDial', 'navStats', 'navFleet'].forEach(id => {
+        document.getElementById(id).className = 'flex flex-col items-center text-slate-500 hover:text-slate-300';
+      });
+
+      if (screen === 'dial') {
+        document.getElementById('screenDial').classList.remove('hidden');
+        document.getElementById('navDial').className = 'flex flex-col items-center text-purple-400';
+      } else if (screen === 'fleet') {
+        document.getElementById('screenFleet').classList.remove('hidden');
+        document.getElementById('navFleet').className = 'flex flex-col items-center text-purple-400';
+      } else if (screen === 'stats') {
+        document.getElementById('screenStats').classList.remove('hidden');
+        document.getElementById('navStats').className = 'flex flex-col items-center text-purple-400';
+        initAppChart();
+      }
+    }
+
+    function initAppChart() {
+      if (chartAppInstance) return;
+      const ctx = document.getElementById('appChart').getContext('2d');
+      
+      chartAppInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ['0m', '10m', '20m', '30m', '40m', '50m', '54m'],
+          datasets: [
+            {
+              label: 'Temp (°C)',
+              data: [26.8, 20.2, 14.5, 9.8, 5.2, 3.4, 2.8],
+              borderColor: '#a855f7',
+              backgroundColor: 'rgba(168, 85, 247, 0.15)',
+              tension: 0.4,
+              fill: true,
+              borderWidth: 3,
+              pointBackgroundColor: '#06b6d4',
+              pointRadius: 4
+            },
+            {
+              label: 'Meta (3.0°C)',
+              data: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+              borderColor: '#64748b',
+              borderDash: [5, 5],
+              borderWidth: 1.5,
+              pointRadius: 0
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94a3b8' }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+    }
+
+    function triggerDownloadAction() {
+      alert('Iniciando leitura BLE rápida do sensor AoFrio mais próximo...');
+      showScreen('dial');
+    }
+  </script>
+</body>
+</html>

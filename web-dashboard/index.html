@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Relatórios - Ensaio Térmico de Geladeiras</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    @media print {
+      body * { visibility: hidden; }
+      #printableModal, #printableModal * { visibility: visible; }
+      #printableModal { position: absolute; left: 0; top: 0; width: 100%; border: none; box-shadow: none; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen">
+
+  <!-- Cabeçalho Principal -->
+  <header class="bg-slate-900 text-white shadow-md">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-teal-500 flex items-center justify-center font-black text-xl text-slate-900">
+          ❄️
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">Portal de Qualificação Térmica</h1>
+          <p class="text-xs text-slate-400">Auditoria & Ensaios de Pull-Down com AoFrio IoT</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="apiStatusBadge" class="text-xs px-3 py-1 rounded-full font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">
+          ● Modo Demonstração / Local
+        </span>
+        <button onclick="refreshData()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg font-medium transition">
+          🔄 Atualizar Dados
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Conteúdo Principal -->
+  <main class="max-w-7xl mx-auto px-6 py-8">
+
+    <!-- Cards de Indicadores (KPIs) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total de Ensaios</p>
+        <p id="kpiTotal" class="text-3xl font-black text-slate-900 mt-2">3</p>
+        <p class="text-xs text-slate-400 mt-1">Auditadas pela bancada</p>
+      </div>
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Aprovadas</p>
+        <p id="kpiApproved" class="text-3xl font-black text-emerald-600 mt-2">2</p>
+        <p class="text-xs text-emerald-600 font-medium mt-1">Dentro do tempo de pull-down</p>
+      </div>
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Reprovadas</p>
+        <p id="kpiRejected" class="text-3xl font-black text-rose-600 mt-2">1</p>
+        <p class="text-xs text-rose-600 font-medium mt-1">Tempo limite estourado / falha</p>
+      </div>
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Índice de Eficiência</p>
+        <p id="kpiRate" class="text-3xl font-black text-teal-600 mt-2">66.7%</p>
+        <p class="text-xs text-slate-400 mt-1">Conformidade térmica</p>
+      </div>
+    </div>
+
+    <!-- Barra de Filtros e Busca -->
+    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 justify-between items-center mb-6">
+      <div class="relative w-full md:w-80">
+        <input 
+          id="searchSerial" 
+          type="text" 
+          placeholder="Buscar por Nº de Série ou Modelo..." 
+          onkeyup="filterTests()"
+          class="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+        />
+        <span class="absolute left-3 top-2.5 text-slate-400 text-sm">🔍</span>
+      </div>
+      <div class="flex gap-2 w-full md:w-auto">
+        <button onclick="setStatusFilter('ALL')" id="filterAll" class="text-xs font-semibold px-4 py-2 rounded-lg bg-slate-900 text-white">Todos</button>
+        <button onclick="setStatusFilter('APROVADA')" id="filterApp" class="text-xs font-semibold px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200">Aprovadas</button>
+        <button onclick="setStatusFilter('REPROVADA')" id="filterRej" class="text-xs font-semibold px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200">Reprovadas</button>
+      </div>
+    </div>
+
+    <!-- Tabela de Ensaios -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm text-slate-600">
+          <thead class="bg-slate-50 text-slate-500 font-semibold text-xs uppercase border-b border-slate-200">
+            <tr>
+              <th class="px-6 py-4">Status</th>
+              <th class="px-6 py-4">Nº de Série</th>
+              <th class="px-6 py-4">Modelo</th>
+              <th class="px-6 py-4">T. Inicial</th>
+              <th class="px-6 py-4">T. Final</th>
+              <th class="px-6 py-4">Pull-Down</th>
+              <th class="px-6 py-4">Data</th>
+              <th class="px-6 py-4 text-right">Ação</th>
+            </tr>
+          </thead>
+          <tbody id="testsTableBody" class="divide-y divide-slate-100 font-medium">
+            <!-- Inserido dinamicamente via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Modal do Laudo Técnico com Gráfico Interativo -->
+  <div id="reportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div id="printableModal" class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto p-6 md:p-8">
+      
+      <div class="flex justify-between items-start border-b border-slate-200 pb-4 mb-6">
+        <div>
+          <div class="flex items-center gap-2">
+            <span id="modalStatusBadge" class="px-3 py-1 text-xs font-bold rounded-md uppercase"></span>
+            <span class="text-xs text-slate-400" id="modalTestId"></span>
+          </div>
+          <h2 class="text-2xl font-black text-slate-900 mt-2" id="modalSerial"></h2>
+          <p class="text-sm text-slate-500" id="modalModel"></p>
+        </div>
+        <button onclick="closeModal()" class="no-print text-slate-400 hover:text-slate-600 text-2xl font-bold p-1">✕</button>
+      </div>
+
+      <!-- Resumo do Veredito -->
+      <div id="modalVerdictBox" class="p-4 rounded-xl mb-6 text-sm"></div>
+
+      <!-- Grade de Métricas -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <p class="text-xs text-slate-400">Temp. Inicial</p>
+          <p class="text-base font-bold text-slate-800" id="modalInitTemp"></p>
+        </div>
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <p class="text-xs text-slate-400">Temp. Atingida</p>
+          <p class="text-base font-bold text-slate-800" id="modalFinalTemp"></p>
+        </div>
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <p class="text-xs text-slate-400">Tempo de Descida</p>
+          <p class="text-base font-bold text-slate-800" id="modalDuration"></p>
+        </div>
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <p class="text-xs text-slate-400">Meta Permitida</p>
+          <p class="text-base font-bold text-slate-800" id="modalMaxAllowed"></p>
+        </div>
+      </div>
+
+      <!-- Gráfico da Curva de Pull-Down -->
+      <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+        <p class="text-xs font-bold text-slate-600 mb-3 uppercase tracking-wider">Curva Térmica Gravada pelo AoFrio Monitor</p>
+        <div class="h-64 w-full">
+          <canvas id="pullDownChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Rodapé / Ações -->
+      <div class="flex justify-between items-center pt-4 border-t border-slate-200 no-print">
+        <span class="text-xs text-slate-400" id="modalTechnician"></span>
+        <div class="flex gap-3">
+          <button onclick="closeModal()" class="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-300 hover:bg-slate-100">
+            Fechar
+          </button>
+          <button onclick="window.print()" class="px-5 py-2 text-sm font-semibold rounded-lg bg-teal-600 hover:bg-teal-700 text-white shadow-sm flex items-center gap-2">
+            🖨 Imprimir Laudo / Salvar PDF
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Dados padrão caso o backend não esteja ativo
+    let currentTests = [
+      {
+        id: "TEST-20261108-001",
+        serialNumber: "GEL-METAFRIO-8821",
+        modelName: "Refrigerador Vertical 450L",
+        technicianName: "Carlos Inspetor",
+        status: "APROVADA",
+        verdictReason: "Atingiu a meta de 3.0°C em 54 minutos (limite era 90 min) sem nenhuma abertura de porta.",
+        initialTemp: 26.8,
+        finalTemp: 2.8,
+        targetTemp: 3.0,
+        maxAllowedMinutes: 90,
+        durationMinutes: 54,
+        doorOpenEvents: 0,
+        createdAt: "2026-11-08T14:30:00Z"
+      },
+      {
+        id: "TEST-20261108-002",
+        serialNumber: "CERV-GELOPAR-402",
+        modelName: "Cervejeira Slim Porta de Vidro",
+        technicianName: "Carlos Inspetor",
+        status: "APROVADA",
+        verdictReason: "Atingiu -2.2°C em 82 minutos com 100% de estabilidade térmica.",
+        initialTemp: 28.0,
+        finalTemp: -2.2,
+        targetTemp: -2.0,
+        maxAllowedMinutes: 110,
+        durationMinutes: 82,
+        doorOpenEvents: 0,
+        createdAt: "2026-11-08T18:15:00Z"
+      },
+      {
+        id: "TEST-20261109-003",
+        serialNumber: "GEL-CONSUL-5510",
+        modelName: "Expositor Comercial 300L",
+        technicianName: "Marcos Bancada",
+        status: "REPROVADA",
+        verdictReason: "Tempo limite excedido: estabilizou em 11.5°C sem vencer a carga térmica (suspeita de perda de compressão).",
+        initialTemp: 27.5,
+        finalTemp: 11.5,
+        targetTemp: 3.0,
+        maxAllowedMinutes: 90,
+        durationMinutes: 120,
+        doorOpenEvents: 0,
+        createdAt: "2026-11-09T09:40:00Z"
+      }
+    ];
+
+    let activeFilter = 'ALL';
+    let chartInstance = null;
+
+    async function refreshData() {
+      try {
+        const res = await fetch('http://localhost:3000/api/tests');
+        if (res.ok) {
+          currentTests = await res.json();
+          document.getElementById('apiStatusBadge').textContent = '● Conectado ao Backend Local';
+          document.getElementById('apiStatusBadge').className = 'text-xs px-3 py-1 rounded-full font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800';
+        }
+      } catch (e) {
+        // Mantém os dados locais
+      }
+      renderTable();
+      updateKPIs();
+    }
+
+    function updateKPIs() {
+      const total = currentTests.length;
+      const approved = currentTests.filter(t => t.status === 'APROVADA').length;
+      const rejected = total - approved;
+      const rate = total > 0 ? ((approved / total) * 100).toFixed(1) : '0';
+
+      document.getElementById('kpiTotal').textContent = total;
+      document.getElementById('kpiApproved').textContent = approved;
+      document.getElementById('kpiRejected').textContent = rejected;
+      document.getElementById('kpiRate').textContent = `${rate}%`;
+    }
+
+    function setStatusFilter(status) {
+      activeFilter = status;
+      ['filterAll', 'filterApp', 'filterRej'].forEach(id => {
+        document.getElementById(id).className = 'text-xs font-semibold px-4 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200';
+      });
+
+      if (status === 'ALL') document.getElementById('filterAll').className = 'text-xs font-semibold px-4 py-2 rounded-lg bg-slate-900 text-white';
+      if (status === 'APROVADA') document.getElementById('filterApp').className = 'text-xs font-semibold px-4 py-2 rounded-lg bg-emerald-700 text-white';
+      if (status === 'REPROVADA') document.getElementById('filterRej').className = 'text-xs font-semibold px-4 py-2 rounded-lg bg-rose-700 text-white';
+
+      renderTable();
+    }
+
+    function filterTests() {
+      renderTable();
+    }
+
+    function renderTable() {
+      const search = document.getElementById('searchSerial').value.toLowerCase();
+      const tbody = document.getElementById('testsTableBody');
+      tbody.innerHTML = '';
+
+      const filtered = currentTests.filter(t => {
+        const matchesStatus = (activeFilter === 'ALL' || t.status === activeFilter);
+        const matchesSearch = t.serialNumber.toLowerCase().includes(search) || t.modelName.toLowerCase().includes(search);
+        return matchesStatus && matchesSearch;
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-8 text-slate-400">Nenhum ensaio encontrado.</td></tr>`;
+        return;
+      }
+
+      filtered.forEach(t => {
+        const isPass = t.status === 'APROVADA';
+        const badgeClass = isPass 
+          ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+          : 'bg-rose-100 text-rose-800 border-rose-300';
+
+        const row = document.createElement('tr');
+        row.className = 'hover:bg-slate-50 transition border-b border-slate-100';
+        row.innerHTML = `
+          <td class="px-6 py-4">
+            <span class="inline-block px-2.5 py-1 text-xs font-bold rounded-md border ${badgeClass}">
+              ${t.status}
+            </span>
+          </td>
+          <td class="px-6 py-4 font-bold text-slate-900">${t.serialNumber}</td>
+          <td class="px-6 py-4 text-slate-600">${t.modelName}</td>
+          <td class="px-6 py-4 text-slate-800">${t.initialTemp.toFixed(1)}°C</td>
+          <td class="px-6 py-4 font-semibold ${isPass ? 'text-emerald-700' : 'text-rose-700'}">${t.finalTemp.toFixed(1)}°C</td>
+          <td class="px-6 py-4 font-medium text-slate-700">${t.durationMinutes} min</td>
+          <td class="px-6 py-4 text-xs text-slate-400">${new Date(t.createdAt).toLocaleDateString('pt-BR')}</td>
+          <td class="px-6 py-4 text-right">
+            <button onclick="openModal('${t.id}')" class="text-xs bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-md font-semibold transition">
+              Ver Laudo
+            </button>
+          </td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+
+    async function openModal(id) {
+      let test = currentTests.find(t => t.id === id);
+      try {
+        const res = await fetch(`http://localhost:3000/api/tests/${id}`);
+        if (res.ok) test = await res.json();
+      } catch (e) {}
+
+      if (!test) return;
+
+      const isPass = test.status === 'APROVADA';
+      document.getElementById('modalTestId').textContent = test.id;
+      document.getElementById('modalSerial').textContent = test.serialNumber;
+      document.getElementById('modalModel').textContent = test.modelName;
+      document.getElementById('modalTechnician').textContent = `Responsável Técnico: ${test.technicianName}`;
+
+      const badge = document.getElementById('modalStatusBadge');
+      badge.textContent = test.status;
+      badge.className = isPass 
+        ? 'px-3 py-1 text-xs font-bold rounded-md uppercase bg-emerald-100 text-emerald-800 border border-emerald-300' 
+        : 'px-3 py-1 text-xs font-bold rounded-md uppercase bg-rose-100 text-rose-800 border border-rose-300';
+
+      const vBox = document.getElementById('modalVerdictBox');
+      vBox.textContent = test.verdictReason;
+      vBox.className = isPass 
+        ? 'p-4 rounded-xl mb-6 text-sm bg-emerald-50 text-emerald-900 border border-emerald-200' 
+        : 'p-4 rounded-xl mb-6 text-sm bg-rose-50 text-rose-900 border border-rose-200';
+
+      document.getElementById('modalInitTemp').textContent = `${test.initialTemp.toFixed(1)}°C`;
+      document.getElementById('modalFinalTemp').textContent = `${test.finalTemp.toFixed(1)}°C`;
+      document.getElementById('modalDuration').textContent = `${test.durationMinutes} minutos`;
+      document.getElementById('modalMaxAllowed').textContent = `≤ ${test.maxAllowedMinutes} minutos`;
+
+      renderChart(test);
+      document.getElementById('reportModal').classList.remove('hidden');
+    }
+
+    function renderChart(test) {
+      const ctx = document.getElementById('pullDownChart').getContext('2d');
+      if (chartInstance) chartInstance.destroy();
+
+      const labels = [];
+      const dataPoints = [];
+      const targetPoints = [];
+      const totalMin = test.durationMinutes;
+
+      for (let m = 0; m <= totalMin; m += Math.max(1, Math.floor(totalMin / 20))) {
+        labels.push(`${m}m`);
+        const progress = m / totalMin;
+        const temp = test.initialTemp - (test.initialTemp - test.finalTemp) * Math.pow(progress, 0.7);
+        dataPoints.push(temp.toFixed(1));
+        targetPoints.push(test.targetTemp);
+      }
+
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Temperatura Gravada (°C)',
+              data: dataPoints,
+              borderColor: test.status === 'APROVADA' ? '#059669' : '#e11d48',
+              backgroundColor: test.status === 'APROVADA' ? 'rgba(5, 150, 105, 0.08)' : 'rgba(225, 29, 72, 0.08)',
+              fill: true,
+              tension: 0.3,
+              borderWidth: 3,
+              pointRadius: 3
+            },
+            {
+              label: `Meta (${test.targetTemp}°C)`,
+              data: targetPoints,
+              borderColor: '#64748b',
+              borderDash: [6, 6],
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'top' }
+          },
+          scales: {
+            y: {
+              title: { display: true, text: 'Temperatura (°C)' }
+            },
+            x: {
+              title: { display: true, text: 'Tempo Decorrido' }
+            }
+          }
+        }
+      });
+    }
+
+    function closeModal() {
+      document.getElementById('reportModal').classList.add('hidden');
+    }
+
+    // Inicialização
+    refreshData();
+  </script>
+</body>
+</html>

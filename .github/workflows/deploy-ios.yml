@@ -1,0 +1,93 @@
+name: Build iOS & Deploy TestFlight
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Build IPA & Upload to TestFlight
+    runs-on: macos-14 # macOS Sonoma com Xcode 15/16 em Apple Silicon
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java / Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Select Xcode Version
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Install Apple Certificate and Provisioning Profile
+        env:
+          CERTIFICATES_P12: ${{ secrets.CERTIFICATES_P12 }}
+          CERTIFICATES_P12_PASSWORD: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
+          KEYCHAIN_PASSWORD: "temporary_build_password"
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_cert.p12
+          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+
+          # Decodifica os segredos Base64
+          echo "$CERTIFICATES_P12" | base64 --decode > "$CERTIFICATE_PATH"
+          echo "$PROVISIONING_PROFILE" | base64 --decode > "$PP_PATH"
+
+          # Cria keychain temporário
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Importa o certificado
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATES_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          # Instala o profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Install Flutter Dependencies
+        run: |
+          cd mobile-app
+          flutter pub get
+
+      - name: Build iOS IPA
+        run: |
+          cd mobile-app
+          flutter build ipa --release --export-options-plist=ExportOptions.plist
+
+      - name: Upload to TestFlight
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          # Encontra o .ipa gerado
+          IPA_PATH=$(find mobile-app/build/ios/ipa -name "*.ipa" | head -n 1)
+          echo "Encontrado IPA: $IPA_PATH"
+
+          # Salva a chave .p8
+          echo "$APPSTORE_PRIVATE_KEY" > AuthKey_${APPSTORE_KEY_ID}.p8
+          mkdir -p ~/.appstoreconnect/private_keys
+          mv AuthKey_${APPSTORE_KEY_ID}.p8 ~/.appstoreconnect/private_keys/
+
+          # Upload via xcrun altool
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$APPSTORE_KEY_ID" \
+            --apiIssuer "$APPSTORE_ISSUER_ID"
+
+      - name: Cleanup Keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+          rm -rf ~/.appstoreconnect/private_keys || true

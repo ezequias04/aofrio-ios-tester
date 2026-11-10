@@ -1,11 +1,21 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// Servir os arquivos do Web Dashboard e do App Mobile
+const dashboardDir = path.join(__dirname, '../../web-dashboard');
+app.use(express.static(dashboardDir));
+
+// Rota direta para o App Mobile no iPhone
+app.get('/mobile', (req, res) => {
+  res.sendFile(path.join(dashboardDir, 'app-screens-preview.html'));
+});
 
 // Banco de dados em memória inicial com ensaios pré-carregados
 let testsDatabase = [
@@ -150,9 +160,10 @@ app.get('/api/stats', (req, res) => {
   res.json({ total, approved, rejected, approvalRate: `${rate}%` });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`====================================================`);
-  console.log(`  AoFrio Refrigeration API rodando na porta ${PORT}`);
-  console.log(`  URL: http://localhost:${PORT}`);
+  console.log(`  AoFrio System Ativo na Rede Local!`);
+  console.log(`  Portal Web:    http://localhost:${PORT}`);
+  console.log(`  App no iPhone: http://192.168.0.68:${PORT}/mobile`);
   console.log(`====================================================`);
 });

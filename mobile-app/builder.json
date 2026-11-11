@@ -1,0 +1,16 @@
+{
+  "project": "AoFrioTester",
+  "platform": "ios",
+  "github": {
+    "owner": "ezequias04",
+    "repo": "aofrio-ios-tester"
+  },
+  "provider": "github",
+  "ios": {
+    "path": "ios",
+    "scheme": "Runner"
+  },
+  "flutter": {
+    "version": ""
+  }
+}

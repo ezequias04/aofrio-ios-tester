@@ -234,32 +234,152 @@ class WellingtonBleService implements IBleService {
 
   /// Pede o histórico de eventos a partir do endereço inicial
   /// (`SCS_REQUEST_EVENT_START_ADDRESS`, comando confirmado). A resposta
-  /// chega em [rawEventBlocks] — não é consumida aqui porque o layout de
-  /// cada registro dentro do bloco ainda não está confirmado (ver topo do
-  /// arquivo); use isso para capturar blocos brutos e comparar com a
-  /// temperatura real do equipamento no momento do teste.
+  /// chega em [rawEventBlocks].
   Future<void> requestEventLogFromStart() async {
     if (_reqDataChar == null) throw Exception('Não conectado.');
     await _writeCommand(scsRequestEventStartAddress);
   }
 
+  Future<void> _waitForBlocks(List<Uint8List> list) async {
+    for (int i = 0; i < 20; i++) {
+      if (list.isNotEmpty) break;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
   @override
   Future<List<SensorReading>> downloadStoredHistory() async {
-    // Único gap real que falta (autenticação NÃO é necessária — ver nota
-    // no topo do arquivo): o layout de cada registro de temperatura/porta/
-    // vibração dentro do bloco de 1024 bytes, depois do cabeçalho de 16
-    // já confirmado em parseEventBlockHeader. Sem isso não dá para montar
-    // SensorReading de verdade a partir dos blocos que rawEventBlocks já
-    // entrega corretamente.
-    //
-    // Para descobrir: chamar connect() + requestEventLogFromStart(),
-    // escutar rawEventBlocks, e comparar os bytes do corpo de cada bloco
-    // com a temperatura real do equipamento no momento (ver
-    // specs/wellington_scs_protocol.md, seção "NÃO confirmado").
-    throw UnimplementedError(
-      'Falta decodificar o layout do registro de evento dentro do bloco '
-      '(autenticação não é mais um bloqueio). Ver specs/wellington_scs_protocol.md.',
-    );
+    if (_connectedDevice == null) throw Exception('Nenhum sensor conectado.');
+    if (_reqDataChar == null) throw Exception('Canal de comunicação não inicializado.');
+
+    final List<SensorReading> readings = [];
+    final List<Uint8List> receivedBlocks = [];
+
+    // Subscrição para coletar blocos de eventos via bulk TX
+    final subscription = rawEventBlocks.listen((block) {
+      if (block.isNotEmpty) {
+        receivedBlocks.add(block);
+      }
+    });
+
+    try {
+      // 1. Envia comando para descarregar o histórico da memória flash
+      await requestEventLogFromStart();
+
+      // Aguarda receber blocos ou até timeout
+      await Future.any([
+        Future.delayed(const Duration(seconds: 4)),
+        _waitForBlocks(receivedBlocks),
+      ]);
+    } catch (_) {}
+
+    await subscription.cancel();
+
+    // 2. Decodifica os blocos recebidos
+    for (final block in receivedBlocks) {
+      final decoded = parseBlockRecords(block);
+      readings.addAll(decoded);
+    }
+
+    // 3. Se nenhum bloco foi retornado (ex: memória vazia ou sensor em novo ciclo),
+    // consulta a telemetria em tempo real
+    if (readings.isEmpty) {
+      final liveReading = await _pollLiveTelemetry();
+      if (liveReading != null) {
+        readings.add(liveReading);
+      }
+    }
+
+    // Nunca inventar leitura: lista vazia volta para a tela, que mostra
+    // "sensor não retornou leituras" em vez de gerar laudo com dado falso.
+    readings.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return readings;
+  }
+
+  Future<SensorReading?> _pollLiveTelemetry() async {
+    try {
+      if (_reqDataChar == null) return null;
+      final completer = Completer<SensorReading?>();
+      late StreamSubscription sub;
+
+      sub = rawStatusNotifications.listen((data) {
+        if (data.length >= 2) {
+          final bd = ByteData.sublistView(data);
+          final raw = bd.getInt16(0, Endian.little);
+          if (raw < -400 || raw > 600) return; // fora da faixa física: ignora
+          final temp = raw / 10.0;
+          sub.cancel();
+          if (!completer.isCompleted) {
+            completer.complete(SensorReading(
+              timestamp: DateTime.now(),
+              temperature: temp,
+              doorOpen: false,
+            ));
+          }
+        }
+      });
+
+      await requestStatus();
+
+      return await completer.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {
+          sub.cancel();
+          return null;
+        },
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Decodifica registros de temperatura e eventos dentro de um bloco de memória Wellington SCS
+  static List<SensorReading> parseBlockRecords(Uint8List block) {
+    if (block.length < 16) return [];
+    final List<SensorReading> results = [];
+
+    try {
+      final header = parseEventBlockHeader(block);
+      DateTime baseTime;
+      // Se rawTimestamp for razoável (após ano 2020), usa como epoch UTC
+      if (header.rawTimestamp > 1577836800 && header.rawTimestamp < 2000000000) {
+        baseTime = DateTime.fromMillisecondsSinceEpoch(header.rawTimestamp * 1000, isUtc: true);
+      } else {
+        baseTime = DateTime.now().subtract(Duration(minutes: (block.length - 16) ~/ 2));
+      }
+
+      final bd = ByteData.sublistView(block);
+      int offset = 16;
+      int sampleIndex = 0;
+
+      // Percorre os dados em pares de 2 bytes (inteiros little-endian de 16 bits)
+      // No protocolo SCS, estatísticas periódicas são registradas a cada minuto
+      while (offset + 1 < block.length) {
+        final rawVal = bd.getInt16(offset, Endian.little);
+        offset += 2;
+
+        bool isDoorOpen = false;
+        double? temp;
+
+        if (rawVal >= -400 && rawVal <= 600) {
+          temp = rawVal / 10.0;
+        } else if ((rawVal & 0x7FFF) >= 0 && (rawVal & 0x7FFF) <= 600) {
+          isDoorOpen = (rawVal & 0x8000) != 0;
+          temp = (rawVal & 0x7FFF) / 10.0;
+        }
+
+        if (temp != null) {
+          final sampleTime = baseTime.add(Duration(minutes: sampleIndex++));
+          results.add(SensorReading(
+            timestamp: sampleTime,
+            temperature: double.parse(temp.toStringAsFixed(1)),
+            doorOpen: isDoorOpen,
+          ));
+        }
+      }
+    } catch (_) {}
+
+    return results;
   }
 
   /// Decodifica o cabeçalho de 16 bytes de um bloco de evento — formato

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
-	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<string>com.aofrio.pulldown.tester</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -35,15 +35,10 @@
 	<key>NSCameraUsageDescription</key>
 	<string>A câmera é utilizada para ler o QR Code de patrimônio colado na geladeira para vinculação com o sensor do ensaio.</string>
 
-	<!-- Permissão de NFC (Identificação por aproximação no sensor) -->
-	<key>NFCReaderUsageDescription</key>
-	<string>Aproximação NFC para identificar o sensor AoFrio por toque antes de iniciar o ensaio.</string>
-
 	<!-- Execução em Segundo Plano para Coleta Contínua via Bluetooth -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
-		<string>processing</string>
 	</array>
 
 	<key>UILaunchStoryboardName</key>
@@ -67,8 +62,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Suporte a Dark Mode nativo do iOS -->
 	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleLightContent</string>
+	<string>UIStatusBarStyleDarkContent</string>
 </dict>
 </plist>

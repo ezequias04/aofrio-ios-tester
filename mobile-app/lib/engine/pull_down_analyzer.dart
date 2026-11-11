@@ -208,6 +208,7 @@ class PullDownAnalyzer {
       coolingRate: coolingRate,
       doorOpenEvents: doorEvents,
       compressorDutyCycle: dutyCycle,
+      effectiveAllowedMinutes: effectiveAllowedMinutes,
       readings: readings,
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'services/mock_ble_service.dart';
 import 'screens/home_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,16 +21,10 @@ class AoFrioTestingApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AoFrio Pull-Down Tester',
+      title: 'AoFrio Test',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0F0E17),
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF8B5CF6),
-          secondary: Color(0xFF06B6D4),
-          surface: Color(0xFF181622),
-        ),
-      ),
+      theme: AppTheme.light,
+      themeMode: ThemeMode.light,
       home: HomeScreen(initialBleService: bleService),
     );
   }

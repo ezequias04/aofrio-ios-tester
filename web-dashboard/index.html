@@ -32,11 +32,17 @@
         </div>
       </div>
       <div class="flex items-center gap-3">
+        <a href="/mobile" target="_blank" class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg font-bold transition flex items-center gap-1 shadow-sm">
+          ⚡ Terminal Neon Pull-Down
+        </a>
+        <button onclick="injectSimulatedTest()" class="text-xs bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded-lg font-bold transition flex items-center gap-1 shadow-sm">
+          ➕ Simular Ensaio no PC
+        </button>
         <span id="apiStatusBadge" class="text-xs px-3 py-1 rounded-full font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">
-          ● Modo Demonstração / Local
+          ● Conectado
         </span>
         <button onclick="refreshData()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg font-medium transition">
-          🔄 Atualizar Dados
+          🔄 Atualizar
         </button>
       </div>
     </div>
@@ -49,22 +55,22 @@
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
       <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total de Ensaios</p>
-        <p id="kpiTotal" class="text-3xl font-black text-slate-900 mt-2">3</p>
+        <p id="kpiTotal" class="text-3xl font-black text-slate-900 mt-2">0</p>
         <p class="text-xs text-slate-400 mt-1">Auditadas pela bancada</p>
       </div>
       <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Aprovadas</p>
-        <p id="kpiApproved" class="text-3xl font-black text-emerald-600 mt-2">2</p>
+        <p id="kpiApproved" class="text-3xl font-black text-emerald-600 mt-2">0</p>
         <p class="text-xs text-emerald-600 font-medium mt-1">Dentro do tempo de pull-down</p>
       </div>
       <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Reprovadas</p>
-        <p id="kpiRejected" class="text-3xl font-black text-rose-600 mt-2">1</p>
+        <p id="kpiRejected" class="text-3xl font-black text-rose-600 mt-2">0</p>
         <p class="text-xs text-rose-600 font-medium mt-1">Tempo limite estourado / falha</p>
       </div>
       <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
         <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Índice de Eficiência</p>
-        <p id="kpiRate" class="text-3xl font-black text-teal-600 mt-2">66.7%</p>
+        <p id="kpiRate" class="text-3xl font-black text-teal-600 mt-2">0%</p>
         <p class="text-xs text-slate-400 mt-1">Conformidade térmica</p>
       </div>
     </div>
@@ -95,7 +101,7 @@
           <thead class="bg-slate-50 text-slate-500 font-semibold text-xs uppercase border-b border-slate-200">
             <tr>
               <th class="px-6 py-4">Status</th>
-              <th class="px-6 py-4">Nº de Série</th>
+              <th class="px-6 py-4">Patrimônio / Série</th>
               <th class="px-6 py-4">Modelo</th>
               <th class="px-6 py-4">T. Inicial</th>
               <th class="px-6 py-4">T. Final</th>
@@ -105,7 +111,12 @@
             </tr>
           </thead>
           <tbody id="testsTableBody" class="divide-y divide-slate-100 font-medium">
-            <!-- Inserido dinamicamente via JS -->
+            <!-- Vazio por padrão -->
+            <tr>
+              <td colspan="8" class="text-center py-12 text-slate-400">
+                Nenhum ensaio realizado ainda. Os testes feitos no aplicativo aparecerão aqui automaticamente.
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -119,6 +130,7 @@
       
       <div class="flex justify-between items-start border-b border-slate-200 pb-4 mb-6">
         <div>
+          <p class="text-xs font-bold text-teal-700 uppercase tracking-wider mb-2">Certificado de Ensaio de Pull-Down ISO 23953</p>
           <div class="flex items-center gap-2">
             <span id="modalStatusBadge" class="px-3 py-1 text-xs font-bold rounded-md uppercase"></span>
             <span class="text-xs text-slate-400" id="modalTestId"></span>
@@ -161,9 +173,9 @@
       </div>
 
       <!-- Rodapé / Ações -->
-      <div class="flex justify-between items-center pt-4 border-t border-slate-200 no-print">
+      <div class="flex justify-between items-center pt-4 border-t border-slate-200">
         <span class="text-xs text-slate-400" id="modalTechnician"></span>
-        <div class="flex gap-3">
+        <div class="flex gap-3 no-print">
           <button onclick="closeModal()" class="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-300 hover:bg-slate-100">
             Fechar
           </button>
@@ -177,68 +189,79 @@
   </div>
 
   <script>
-    // Dados padrão caso o backend não esteja ativo
-    let currentTests = [
-      {
-        id: "TEST-20261108-001",
-        serialNumber: "GEL-METAFRIO-8821",
-        modelName: "Refrigerador Vertical 450L",
-        technicianName: "Carlos Inspetor",
-        status: "APROVADA",
-        verdictReason: "Atingiu a meta de 3.0°C em 54 minutos (limite era 90 min) sem nenhuma abertura de porta.",
-        initialTemp: 26.8,
-        finalTemp: 2.8,
-        targetTemp: 3.0,
-        maxAllowedMinutes: 90,
-        durationMinutes: 54,
-        doorOpenEvents: 0,
-        createdAt: "2026-11-08T14:30:00Z"
-      },
-      {
-        id: "TEST-20261108-002",
-        serialNumber: "CERV-GELOPAR-402",
-        modelName: "Cervejeira Slim Porta de Vidro",
-        technicianName: "Carlos Inspetor",
-        status: "APROVADA",
-        verdictReason: "Atingiu -2.2°C em 82 minutos com 100% de estabilidade térmica.",
-        initialTemp: 28.0,
-        finalTemp: -2.2,
-        targetTemp: -2.0,
-        maxAllowedMinutes: 110,
-        durationMinutes: 82,
-        doorOpenEvents: 0,
-        createdAt: "2026-11-08T18:15:00Z"
-      },
-      {
-        id: "TEST-20261109-003",
-        serialNumber: "GEL-CONSUL-5510",
-        modelName: "Expositor Comercial 300L",
-        technicianName: "Marcos Bancada",
-        status: "REPROVADA",
-        verdictReason: "Tempo limite excedido: estabilizou em 11.5°C sem vencer a carga térmica (suspeita de perda de compressão).",
-        initialTemp: 27.5,
-        finalTemp: 11.5,
-        targetTemp: 3.0,
-        maxAllowedMinutes: 90,
-        durationMinutes: 120,
-        doorOpenEvents: 0,
-        createdAt: "2026-11-09T09:40:00Z"
-      }
-    ];
-
+    let currentTests = [];
     let activeFilter = 'ALL';
     let chartInstance = null;
 
-    async function refreshData() {
+    async function injectSimulatedTest() {
+      const serial = 'GEL-DESKTOP-' + Math.floor(1000 + Math.random() * 9000);
+      const isApproved = Math.random() > 0.3;
+      const duration = isApproved ? Math.floor(120 + Math.random() * 25) : 185;
+      const targetTemp = 3.5;
+      const initialTemp = 24.5;
+      const finalTemp = isApproved ? 3.2 : 5.8;
+
+      const readings = [];
+      const now = new Date();
+      let temp = initialTemp;
+      for (let m = 0; m <= duration; m++) {
+        const time = new Date(now.getTime() - (duration - m) * 60000);
+        if (temp > finalTemp) {
+          temp = Math.max(finalTemp, temp - 0.18 + (Math.random() * 0.04 - 0.02));
+        }
+        readings.push({
+          timestamp: time.toISOString(),
+          temperature: parseFloat(temp.toFixed(1)),
+          doorOpen: m >= 45 && m <= 48
+        });
+      }
+
+      const payload = {
+        id: 'TEST-' + Date.now(),
+        serialNumber: serial,
+        modelName: 'Expositor Vertical Metalfrio 400L',
+        technicianName: 'Engenheiro de Testes PC',
+        profile: {
+          id: 'bev_35',
+          name: 'Expositor de Bebidas (3.5°C)',
+          targetTemperature: targetTemp,
+          differential: 1.5,
+          minInitialDrop15: 1.5
+        },
+        initialTemp: initialTemp,
+        finalTemp: finalTemp,
+        durationMinutes: duration,
+        maxAllowedMinutes: 155,
+        status: isApproved ? 'APROVADA' : 'REPROVADA',
+        verdictReason: isApproved 
+          ? `APROVADA com sucesso! Atingiu ${finalTemp}°C em ${duration} min (limite normativo ISO: 155 min).`
+          : `REPROVADA: Tempo limite excedido (levou ${duration} min, limite normativo: 155 min).`,
+        timestamp: new Date().toISOString(),
+        readings: readings
+      };
+
       try {
-        const res = await fetch('http://localhost:3000/api/tests');
+        const res = await fetch('/api/tests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
         if (res.ok) {
-          currentTests = await res.json();
-          document.getElementById('apiStatusBadge').textContent = '● Conectado ao Backend Local';
-          document.getElementById('apiStatusBadge').className = 'text-xs px-3 py-1 rounded-full font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800';
+          await refreshData();
         }
       } catch (e) {
-        // Mantém os dados locais
+        console.error(e);
+      }
+    }
+
+    async function refreshData() {
+      try {
+        const res = await fetch('/api/tests');
+        if (res.ok) {
+          currentTests = await res.json();
+        }
+      } catch (e) {
+        console.error(e);
       }
       renderTable();
       updateKPIs();
@@ -285,7 +308,7 @@
       });
 
       if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-8 text-slate-400">Nenhum ensaio encontrado.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-slate-400">Nenhum ensaio registrado. Execute um teste no celular para vê-lo aqui.</td></tr>`;
         return;
       }
 
@@ -305,8 +328,8 @@
           </td>
           <td class="px-6 py-4 font-bold text-slate-900">${t.serialNumber}</td>
           <td class="px-6 py-4 text-slate-600">${t.modelName}</td>
-          <td class="px-6 py-4 text-slate-800">${t.initialTemp.toFixed(1)}°C</td>
-          <td class="px-6 py-4 font-semibold ${isPass ? 'text-emerald-700' : 'text-rose-700'}">${t.finalTemp.toFixed(1)}°C</td>
+          <td class="px-6 py-4 text-slate-800">${(t.initialTemp || 0).toFixed(1)}°C</td>
+          <td class="px-6 py-4 font-semibold ${isPass ? 'text-emerald-700' : 'text-rose-700'}">${(t.finalTemp || 0).toFixed(1)}°C</td>
           <td class="px-6 py-4 font-medium text-slate-700">${t.durationMinutes} min</td>
           <td class="px-6 py-4 text-xs text-slate-400">${new Date(t.createdAt).toLocaleDateString('pt-BR')}</td>
           <td class="px-6 py-4 text-right">
@@ -322,7 +345,7 @@
     async function openModal(id) {
       let test = currentTests.find(t => t.id === id);
       try {
-        const res = await fetch(`http://localhost:3000/api/tests/${id}`);
+        const res = await fetch(`/api/tests/${id}`);
         if (res.ok) test = await res.json();
       } catch (e) {}
 
@@ -346,8 +369,8 @@
         ? 'p-4 rounded-xl mb-6 text-sm bg-emerald-50 text-emerald-900 border border-emerald-200' 
         : 'p-4 rounded-xl mb-6 text-sm bg-rose-50 text-rose-900 border border-rose-200';
 
-      document.getElementById('modalInitTemp').textContent = `${test.initialTemp.toFixed(1)}°C`;
-      document.getElementById('modalFinalTemp').textContent = `${test.finalTemp.toFixed(1)}°C`;
+      document.getElementById('modalInitTemp').textContent = `${(test.initialTemp || 0).toFixed(1)}°C`;
+      document.getElementById('modalFinalTemp').textContent = `${(test.finalTemp || 0).toFixed(1)}°C`;
       document.getElementById('modalDuration').textContent = `${test.durationMinutes} minutos`;
       document.getElementById('modalMaxAllowed').textContent = `≤ ${test.maxAllowedMinutes} minutos`;
 
@@ -405,12 +428,8 @@
             legend: { position: 'top' }
           },
           scales: {
-            y: {
-              title: { display: true, text: 'Temperatura (°C)' }
-            },
-            x: {
-              title: { display: true, text: 'Tempo Decorrido' }
-            }
+            y: { title: { display: true, text: 'Temperatura (°C)' } },
+            x: { title: { display: true, text: 'Tempo Decorrido' } }
           }
         }
       });
@@ -420,7 +439,7 @@
       document.getElementById('reportModal').classList.add('hidden');
     }
 
-    // Inicialização
+    // Inicialização limpa
     refreshData();
   </script>
 </body>

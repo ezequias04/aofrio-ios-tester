@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -277,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _ensureBluetoothPermissions() async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
@@ -366,6 +366,7 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
           decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.line))),
           child: Center(
+            heightFactor: 1, // sem isso a barra ocupa a tela inteira e esconde o formulário
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1120),
               child: ElevatedButton.icon(
@@ -376,7 +377,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: Text(
                   _isLoading
                       ? _statusText
-                      : (_useRealBle ? 'Conectar ao Sensor e Avaliar' : '▶ Executar Ensaio Pull-Down'),
+                      : (_useRealBle ? 'Conectar ao Sensor e Avaliar' : 'Executar Ensaio Pull-Down'),
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ),

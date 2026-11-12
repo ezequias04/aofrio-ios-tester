@@ -191,6 +191,7 @@ Sistema AoFrio Refrigeration Testing System
             border: Border(top: BorderSide(color: AppColors.line)),
           ),
           child: Center(
+            heightFactor: 1, // sem isso a barra ocupa a tela inteira
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1060),
               child: Row(

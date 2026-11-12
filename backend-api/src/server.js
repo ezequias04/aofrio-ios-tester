@@ -35,6 +35,9 @@ function saveDatabase(data) {
 const dashboardDir = path.join(__dirname, '../../web-dashboard');
 app.use(express.static(dashboardDir));
 
+// App Flutter rodando no navegador do PC (gerado por: flutter build web --base-href /app/)
+app.use('/app', express.static(path.join(__dirname, '../../mobile-app/build/web')));
+
 // Rota direta para o App Mobile no iPhone
 app.get('/mobile', (req, res) => {
   res.sendFile(path.join(dashboardDir, 'app-screens-preview.html'));

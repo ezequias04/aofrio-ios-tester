@@ -152,6 +152,9 @@ class WellingtonBleService implements IBleService {
   /// mostrado na tela quando nenhum Monitor é reconhecido).
   List<String> lastSeenDevices = const [];
 
+  /// Dados de anúncio por dispositivo (fabricante = tipo de produto SCS).
+  final Map<String, String> _advInfo = {};
+
   @override
   Stream<List<DiscoveredDevice>> scanForDevices() async* {
     // No iOS o adaptador começa em "unknown"; escanear antes de "on" não acha nada.
@@ -170,6 +173,14 @@ class WellingtonBleService implements IBleService {
           .map((r) => '${_nameOf(r).isEmpty ? '(sem nome)' : _nameOf(r)} ${r.rssi}dBm')
           .take(8)
           .toList();
+      for (final r in results) {
+        final mfr = r.advertisementData.manufacturerData.entries
+            .map((e) => '0x${e.key.toRadixString(16)}:${e.value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}')
+            .join(' | ');
+        _advInfo[r.device.remoteId.str] =
+            'nome=${_nameOf(r)} rssi=${r.rssi} mfr=[$mfr] svc=${r.advertisementData.serviceUuids.map((u) => u.str128.substring(0, 8)).join(',')} '
+            'svcData=${r.advertisementData.serviceData.entries.map((e) => '${e.key.str128.substring(0, 8)}:${e.value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}').join(' | ')}';
+      }
       return results
           .where(_isWellingtonMonitor)
           .map((r) => DiscoveredDevice(
@@ -229,27 +240,46 @@ class WellingtonBleService implements IBleService {
 
     rawLog.clear();
     _log('CONECTADO $deviceId; serviços: ${services.map((s) => s.uuid.str128.substring(0, 8)).join(',')}');
-    // Diagnóstico: lê tudo que é legível no Asset Track (serial, modelo, etc.)
-    for (final c in assetTrack.characteristics) {
-      _log('CHAR ${c.uuid.str128.substring(0, 8)} props=${c.properties}');
-      if (!c.properties.read) continue;
-      try {
-        _log('READ ${c.uuid.str128.substring(0, 8)}', await c.read());
-      } catch (e) {
-        _log('READ ${c.uuid.str128.substring(0, 8)} falhou: $e');
+    _log('ADV ${_advInfo[deviceId] ?? '(sem dados de anúncio)'}');
+    _log('MTU ${device.mtuNow}');
+    // Diagnóstico (só leitura + inscrição, nada é escrito): todos os serviços.
+    for (final svc in services) {
+      final s8 = svc.uuid.str128.substring(0, 8);
+      for (final c in svc.characteristics) {
+        final c8 = c.uuid.str128.substring(0, 8);
+        final p = c.properties;
+        _log('CHAR $s8/$c8 ${[if (p.read) 'R', if (p.write) 'W', if (p.writeWithoutResponse) 'WNR', if (p.notify) 'N', if (p.indicate) 'I'].join('')}');
+        if (p.read) {
+          try {
+            _log('READ $s8/$c8', await c.read());
+          } catch (e) {
+            _log('READ $s8/$c8 falhou: $e');
+          }
+        }
+        final isAssetTx = c.uuid.str128.toLowerCase() == assetTrackTxCharacteristicUuid ||
+            c.uuid.str128.toLowerCase() == assetTrackBulkTxCharacteristicUuid;
+        if ((p.notify || p.indicate) && !isAssetTx) {
+          try {
+            await c.setNotifyValue(true);
+            c.onValueReceived.listen((v) => _log('NOTIF $s8/$c8', v));
+            _log('NOTIFY ON $s8/$c8');
+          } catch (e) {
+            _log('NOTIFY $s8/$c8 falhou: $e');
+          }
+        }
       }
     }
 
     // Ativar notificação em ambas as características é tudo que o "handshake"
     // de autenticação exige para o Monitor — ver nota no topo do arquivo.
-    await _assetTrackTxChar!.setNotifyValue(true);
+    _log('NOTIFY TX efdd2460 -> ${await _assetTrackTxChar!.setNotifyValue(true)}');
     _assetTrackTxChar!.lastValueStream.listen((bytes) {
       if (bytes.isEmpty) return;
       _log('TX', bytes);
       _statusController.add(Uint8List.fromList(bytes));
     });
 
-    await _bulkTxChar!.setNotifyValue(true);
+    _log('NOTIFY BULK ffdd2460 -> ${await _bulkTxChar!.setNotifyValue(true)}');
     _bulkTxChar!.lastValueStream.listen((bytes) {
       if (bytes.isEmpty) return;
       _log('BULK', bytes);

@@ -30,6 +30,18 @@ class _HomeScreenState extends State<HomeScreen> {
   final _modelController = TextEditingController();
   final _technicianController = TextEditingController();
   TestProfile _selectedProfile = TestProfile.defaultProfiles.first;
+
+  /// Janela de captura ao vivo do ensaio pull-down (o sensor transmite a
+  /// temperatura no anúncio BLE; o app grava a curva durante este tempo).
+  /// O aparelho precisa ficar perto do sensor e a tela acesa durante o ensaio.
+  static const _captureWindows = <String, Duration>{
+    '2 min (teste rápido)': Duration(minutes: 2),
+    '15 min': Duration(minutes: 15),
+    '30 min': Duration(minutes: 30),
+    '1 hora': Duration(hours: 1),
+    '2 horas (pull-down completo)': Duration(hours: 2),
+  };
+  Duration _captureWindow = const Duration(minutes: 30);
   late IBleService _currentBleService;
   bool _useRealBle = false;
   bool _isLoading = false;
@@ -222,10 +234,15 @@ class _HomeScreenState extends State<HomeScreen> {
         await _currentBleService.connect('MOCK-DEVICE');
       }
 
-      _setStatus('Baixando histórico do sensor…');
+      final service = _currentBleService;
+      if (service is WellingtonBleService) {
+        service.liveCaptureWindow = _captureWindow;
+        _setStatus('Gravando curva ao vivo por ${_captureWindow.inMinutes} min… não feche o app.');
+      } else {
+        _setStatus('Baixando histórico do sensor…');
+      }
       final readings = await _currentBleService.downloadStoredHistory();
       if (readings.isEmpty) {
-        final service = _currentBleService;
         if (service is WellingtonBleService) {
           await _showBleDiagnostic(service.rawLog.join('\n'));
           return;
@@ -497,6 +514,22 @@ class _HomeScreenState extends State<HomeScreen> {
           )).toList(),
           onChanged: _isLoading ? null : (value) => setState(() => _selectedProfile = value ?? _selectedProfile),
         ),
+        if (_useRealBle) ...[
+          const SizedBox(height: 14),
+          DropdownButtonFormField<Duration>(
+            initialValue: _captureWindow,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Duração do ensaio ao vivo',
+              helperText: 'Mantenha o aparelho perto do sensor e a tela acesa.',
+              prefixIcon: Icon(Icons.timer_outlined),
+            ),
+            items: _captureWindows.entries
+                .map((e) => DropdownMenuItem(value: e.value, child: Text(e.key, overflow: TextOverflow.ellipsis)))
+                .toList(),
+            onChanged: _isLoading ? null : (value) => setState(() => _captureWindow = value ?? _captureWindow),
+          ),
+        ],
         if (mock != null) ...[
           const SizedBox(height: 16),
           const Text('Cenário de simulação:', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink)),

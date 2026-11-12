@@ -227,13 +227,34 @@ class WellingtonBleService implements IBleService {
     }
   }
 
-  /// Desconecta e fica ouvindo o anúncio do sensor por [duration], juntando
-  /// payloads distintos do fabricante 0x578. Chamado quando o histórico via
-  /// conexão não vem — para fechar o campo de temperatura livre de auth.
-  Future<void> _watchAdvertisementTemperature(Duration duration) async {
+  /// Temperatura ao vivo que o Monitor transmite no anúncio BLE, SEM
+  /// autenticação. Formato confirmado no hardware (asset GEUB031229):
+  /// payload do fabricante 0x578 = `01 00` [header] + int16 LE em
+  /// centésimos de °C (bytes 2-3) + nome do asset em ASCII.
+  ///   `01 00 c4 09 ...` = 0x09c4 = 2500 = 25.00 °C
+  ///   `01 00 1e 0a ...` = 0x0a1e = 2590 = 25.90 °C (sobe ao aquecer)
+  /// Retorna null se o payload for curto demais ou a temperatura cair fora
+  /// da faixa física (-40..60 °C) — nunca inventa leitura.
+  static double? decodeAdvTemp(List<int> bytes) {
+    if (bytes.length < 4) return null;
+    final raw = bytes[2] | (bytes[3] << 8);
+    final signed = raw >= 0x8000 ? raw - 0x10000 : raw;
+    final t = signed / 100.0;
+    return (t >= -40 && t <= 60) ? t : null;
+  }
+
+  /// Janela de captura ao vivo (pull-down) quando o histórico interno está
+  /// travado. Ajustável pela tela: quanto maior, mais pontos da curva.
+  Duration liveCaptureWindow = const Duration(seconds: 20);
+
+  /// Desconecta e fica ouvindo o anúncio do sensor por [duration], montando
+  /// a curva de temperatura ao vivo a partir do campo livre de auth
+  /// ([decodeAdvTemp]). Cada payload distinto vira um [SensorReading] com
+  /// seu horário. Chamado quando o histórico via conexão não vem.
+  Future<List<SensorReading>> _watchAdvertisementTemperature(Duration duration) async {
     final id = _connectedDevice?.remoteId.str;
-    if (id == null) return;
-    _log('ADV_WATCH desconectando para ouvir anúncio por ${duration.inSeconds}s…');
+    if (id == null) return const [];
+    _log('ADV_WATCH desconectando para curva ao vivo por ${duration.inSeconds}s…');
     _advSamples.remove(id);
     try {
       await _connectedDevice!.disconnect();
@@ -247,7 +268,7 @@ class WellingtonBleService implements IBleService {
           if (w == null) continue;
           final hex = w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
           final list = _advSamples.putIfAbsent(id, () => []);
-          if ((list.isEmpty || list.last.hex != hex) && list.length < 60) {
+          if ((list.isEmpty || list.last.hex != hex) && list.length < 2000) {
             list.add(_AdvSample(DateTime.now(), hex, List<int>.from(w)));
           }
         }
@@ -259,6 +280,13 @@ class WellingtonBleService implements IBleService {
       _log('ADV_WATCH falhou: $e');
     }
     _dumpAdvSamples(id);
+    final readings = <SensorReading>[];
+    for (final s in _advSamples[id] ?? const <_AdvSample>[]) {
+      final t = decodeAdvTemp(s.bytes);
+      if (t != null) readings.add(SensorReading(timestamp: s.at, temperature: t));
+    }
+    _log('ADV_WATCH ${readings.length} leituras ao vivo decodificadas');
+    return readings;
   }
 
   /// No iOS `platformName` vem vazio antes de conectar; o nome anunciado
@@ -459,9 +487,9 @@ class WellingtonBleService implements IBleService {
         await Future.delayed(const Duration(milliseconds: 1500));
       }
       _log('FIM comandos: ${receivedBlocks.length} blocos BULK, nada decodificado');
-      // Caminho sem autenticação: ouvir o anúncio BLE por 20s e decodificar
-      // o campo de temperatura que o sensor transmite para gateways.
-      await _watchAdvertisementTemperature(const Duration(seconds: 20));
+      // Histórico interno travado: monta a curva pull-down ao vivo a partir
+      // da temperatura que o sensor transmite no anúncio (sem autenticação).
+      readings.addAll(await _watchAdvertisementTemperature(liveCaptureWindow));
     }
 
     // Nunca inventar leitura: lista vazia volta para a tela, que mostra

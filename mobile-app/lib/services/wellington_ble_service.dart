@@ -227,16 +227,33 @@ class WellingtonBleService implements IBleService {
       (c) => c.uuid.str128.toLowerCase() == assetTrackBulkTxCharacteristicUuid,
     );
 
+    rawLog.clear();
+    _log('CONECTADO $deviceId; serviços: ${services.map((s) => s.uuid.str128.substring(0, 8)).join(',')}');
+    // Diagnóstico: lê tudo que é legível no Asset Track (serial, modelo, etc.)
+    for (final c in assetTrack.characteristics) {
+      _log('CHAR ${c.uuid.str128.substring(0, 8)} props=${c.properties}');
+      if (!c.properties.read) continue;
+      try {
+        _log('READ ${c.uuid.str128.substring(0, 8)}', await c.read());
+      } catch (e) {
+        _log('READ ${c.uuid.str128.substring(0, 8)} falhou: $e');
+      }
+    }
+
     // Ativar notificação em ambas as características é tudo que o "handshake"
     // de autenticação exige para o Monitor — ver nota no topo do arquivo.
     await _assetTrackTxChar!.setNotifyValue(true);
     _assetTrackTxChar!.lastValueStream.listen((bytes) {
-      if (bytes.isNotEmpty) _statusController.add(Uint8List.fromList(bytes));
+      if (bytes.isEmpty) return;
+      _log('TX', bytes);
+      _statusController.add(Uint8List.fromList(bytes));
     });
 
     await _bulkTxChar!.setNotifyValue(true);
     _bulkTxChar!.lastValueStream.listen((bytes) {
-      if (bytes.isNotEmpty) _eventBlockController.add(Uint8List.fromList(bytes));
+      if (bytes.isEmpty) return;
+      _log('BULK', bytes);
+      _eventBlockController.add(Uint8List.fromList(bytes));
     });
 
     _isConnected = true;
@@ -252,7 +269,25 @@ class WellingtonBleService implements IBleService {
   }
 
   Future<void> _writeCommand(int commandCode) async {
-    await _reqDataChar!.write([commandCode], withoutResponse: false);
+    _log('WRITE cmd=$commandCode');
+    try {
+      await _reqDataChar!.write([commandCode], withoutResponse: false);
+    } catch (e) {
+      _log('WRITE cmd=$commandCode falhou: $e');
+      rethrow;
+    }
+  }
+
+  /// Registro bruto da sessão BLE (comandos, notificações em hex). Usado no
+  /// botão "Copiar diagnóstico" para fechar o formato real das respostas SCS.
+  final List<String> rawLog = [];
+
+  void _log(String label, [List<int>? bytes]) {
+    final t = DateTime.now().toIso8601String().substring(11, 23);
+    final hex = bytes == null
+        ? ''
+        : ' [${bytes.length}] ${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}';
+    if (rawLog.length < 400) rawLog.add('$t $label$hex');
   }
 
   /// Pede o histórico de eventos a partir do endereço inicial
@@ -294,7 +329,9 @@ class WellingtonBleService implements IBleService {
         Future.delayed(const Duration(seconds: 4)),
         _waitForBlocks(receivedBlocks),
       ]);
-    } catch (_) {}
+    } catch (e) {
+      _log('ERRO pedindo histórico: $e');
+    }
 
     await subscription.cancel();
 
@@ -311,6 +348,17 @@ class WellingtonBleService implements IBleService {
       if (liveReading != null) {
         readings.add(liveReading);
       }
+    }
+
+    if (readings.isEmpty) {
+      // Diagnóstico: pede relógio e status de novo e espera respostas brutas.
+      for (final cmd in [scsRequestTimestamp, scsRequestStatus, scsRequestEventStartAddress]) {
+        try {
+          await _writeCommand(cmd);
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 1500));
+      }
+      _log('FIM: ${receivedBlocks.length} blocos BULK, nenhuma leitura decodificada');
     }
 
     // Nunca inventar leitura: lista vazia volta para a tela, que mostra

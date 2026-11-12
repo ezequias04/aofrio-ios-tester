@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../engine/pull_down_analyzer.dart';
@@ -223,7 +224,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _setStatus('Baixando histórico do sensor…');
       final readings = await _currentBleService.downloadStoredHistory();
-      if (readings.isEmpty) throw Exception('O sensor não retornou leituras para analisar.');
+      if (readings.isEmpty) {
+        final service = _currentBleService;
+        if (service is WellingtonBleService) {
+          await _showBleDiagnostic(service.rawLog.join('\n'));
+          return;
+        }
+        throw Exception('O sensor não retornou leituras para analisar.');
+      }
       _setStatus('Analisando a curva térmica ISO 23953…');
       final result = PullDownAnalyzer.analyze(
         serialNumber: _serialController.text.trim(),
@@ -254,6 +262,35 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
   }
+
+  Future<void> _showBleDiagnostic(String log) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Sensor conectou, mas não enviou leituras'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                'Toque em "Copiar diagnóstico" e envie o texto para o suporte. '
+                'Ele mostra os bytes que o sensor respondeu.\n\n$log',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fechar')),
+            FilledButton.icon(
+              icon: const Icon(Icons.copy),
+              label: const Text('Copiar diagnóstico'),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: log));
+                if (context.mounted) Navigator.of(context).pop();
+                _showError('Diagnóstico copiado. Cole no WhatsApp/e-mail para enviar.');
+              },
+            ),
+          ],
+        ),
+      );
 
   void _showTimeoutWithSimulatorOption() {
     if (!mounted) return;

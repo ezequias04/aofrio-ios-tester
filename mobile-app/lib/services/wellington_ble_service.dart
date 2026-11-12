@@ -155,6 +155,11 @@ class WellingtonBleService implements IBleService {
   /// Dados de anúncio por dispositivo (fabricante = tipo de produto SCS).
   final Map<String, String> _advInfo = {};
 
+  /// Série temporal de payloads do fabricante (0x578) vistos no anúncio,
+  /// por dispositivo. Chave = deviceId. Usado para achar o campo de
+  /// temperatura que o sensor transmite sem autenticação.
+  final Map<String, List<_AdvSample>> _advSamples = {};
+
   @override
   Stream<List<DiscoveredDevice>> scanForDevices() async* {
     // No iOS o adaptador começa em "unknown"; escanear antes de "on" não acha nada.
@@ -174,6 +179,14 @@ class WellingtonBleService implements IBleService {
           .take(8)
           .toList();
       for (final r in results) {
+        final wellington = r.advertisementData.manufacturerData[0x578];
+        if (wellington != null) {
+          final list = _advSamples.putIfAbsent(r.device.remoteId.str, () => []);
+          final hex = wellington.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+          if (list.isEmpty || list.last.hex != hex) {
+            if (list.length < 60) list.add(_AdvSample(DateTime.now(), hex, List<int>.from(wellington)));
+          }
+        }
         final mfr = r.advertisementData.manufacturerData.entries
             .map((e) => '0x${e.key.toRadixString(16)}:${e.value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}')
             .join(' | ');
@@ -190,6 +203,62 @@ class WellingtonBleService implements IBleService {
               ))
           .toList();
     });
+  }
+
+  /// Decodifica a série de anúncios: para cada posição par do payload,
+  /// mostra o int16 little-endian /100 e /10, destacando valores numa faixa
+  /// de temperatura física (-40..60 °C). Se algum acompanhar a temperatura
+  /// real entre amostras, achamos o campo de telemetria livre de auth.
+  void _dumpAdvSamples(String deviceId) {
+    final samples = _advSamples[deviceId] ?? const [];
+    _log('ADV_SAMPLES ${samples.length} payloads distintos do fabricante 0x578');
+    for (final s in samples) {
+      _log('  @${s.at.toIso8601String().substring(11, 19)} ${s.hex}');
+      final cands = <String>[];
+      for (int off = 0; off + 1 < s.bytes.length; off++) {
+        final v = s.bytes[off] | (s.bytes[off + 1] << 8);
+        final signed = v >= 0x8000 ? v - 0x10000 : v;
+        for (final div in [100.0, 10.0]) {
+          final t = signed / div;
+          if (t >= -40 && t <= 60) cands.add('off$off/${div.toInt()}=${t.toStringAsFixed(2)}');
+        }
+      }
+      if (cands.isNotEmpty) _log('     cand °C: ${cands.join('  ')}');
+    }
+  }
+
+  /// Desconecta e fica ouvindo o anúncio do sensor por [duration], juntando
+  /// payloads distintos do fabricante 0x578. Chamado quando o histórico via
+  /// conexão não vem — para fechar o campo de temperatura livre de auth.
+  Future<void> _watchAdvertisementTemperature(Duration duration) async {
+    final id = _connectedDevice?.remoteId.str;
+    if (id == null) return;
+    _log('ADV_WATCH desconectando para ouvir anúncio por ${duration.inSeconds}s…');
+    _advSamples.remove(id);
+    try {
+      await _connectedDevice!.disconnect();
+    } catch (_) {}
+    try {
+      await FlutterBluePlus.startScan(timeout: duration, androidUsesFineLocation: false);
+      final sub = FlutterBluePlus.scanResults.listen((results) {
+        for (final r in results) {
+          if (r.device.remoteId.str != id) continue;
+          final w = r.advertisementData.manufacturerData[0x578];
+          if (w == null) continue;
+          final hex = w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+          final list = _advSamples.putIfAbsent(id, () => []);
+          if ((list.isEmpty || list.last.hex != hex) && list.length < 60) {
+            list.add(_AdvSample(DateTime.now(), hex, List<int>.from(w)));
+          }
+        }
+      });
+      await Future.delayed(duration);
+      await sub.cancel();
+      await FlutterBluePlus.stopScan();
+    } catch (e) {
+      _log('ADV_WATCH falhou: $e');
+    }
+    _dumpAdvSamples(id);
   }
 
   /// No iOS `platformName` vem vazio antes de conectar; o nome anunciado
@@ -241,6 +310,7 @@ class WellingtonBleService implements IBleService {
     rawLog.clear();
     _log('CONECTADO $deviceId; serviços: ${services.map((s) => s.uuid.str128.substring(0, 8)).join(',')}');
     _log('ADV ${_advInfo[deviceId] ?? '(sem dados de anúncio)'}');
+    _dumpAdvSamples(deviceId);
     _log('MTU ${device.mtuNow}');
     // Diagnóstico (só leitura + inscrição, nada é escrito): todos os serviços.
     for (final svc in services) {
@@ -388,7 +458,10 @@ class WellingtonBleService implements IBleService {
         } catch (_) {}
         await Future.delayed(const Duration(milliseconds: 1500));
       }
-      _log('FIM: ${receivedBlocks.length} blocos BULK, nenhuma leitura decodificada');
+      _log('FIM comandos: ${receivedBlocks.length} blocos BULK, nada decodificado');
+      // Caminho sem autenticação: ouvir o anúncio BLE por 20s e decodificar
+      // o campo de temperatura que o sensor transmite para gateways.
+      await _watchAdvertisementTemperature(const Duration(seconds: 20));
     }
 
     // Nunca inventar leitura: lista vazia volta para a tela, que mostra
@@ -528,4 +601,12 @@ class EventBlockHeader {
     required this.protocolVersion,
     required this.reserved,
   });
+}
+
+/// Uma amostra do payload de fabricante (0x578) do anúncio BLE.
+class _AdvSample {
+  final DateTime at;
+  final String hex;
+  final List<int> bytes;
+  const _AdvSample(this.at, this.hex, this.bytes);
 }

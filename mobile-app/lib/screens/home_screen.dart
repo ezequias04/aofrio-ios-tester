@@ -257,9 +257,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showTimeoutWithSimulatorOption() {
     if (!mounted) return;
+    final service = _currentBleService;
+    final seen = service is WellingtonBleService ? service.lastSeenDevices : const <String>[];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      duration: const Duration(seconds: 6),
-      content: const Text('Nenhum sensor físico AoFrio encontrado por perto.'),
+      duration: const Duration(seconds: 15),
+      content: Text(seen.isEmpty
+          ? 'Nenhum aparelho Bluetooth encontrado. Confira se o Bluetooth está ligado e permitido para o app.'
+          : 'Nenhum sensor AoFrio reconhecido. Aparelhos vistos:\n${seen.join('\n')}'),
       backgroundColor: AppColors.slate,
       action: SnackBarAction(
         label: 'Testar com Simulador',

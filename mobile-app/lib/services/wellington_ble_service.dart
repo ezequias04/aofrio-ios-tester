@@ -148,26 +148,49 @@ class WellingtonBleService implements IBleService {
   @override
   bool get isConnected => _isConnected;
 
-  @override
-  Stream<List<DiscoveredDevice>> scanForDevices() {
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+  /// Nomes de todos os periféricos BLE vistos no último scan (diagnóstico:
+  /// mostrado na tela quando nenhum Monitor é reconhecido).
+  List<String> lastSeenDevices = const [];
 
-    return FlutterBluePlus.scanResults.map((results) {
+  @override
+  Stream<List<DiscoveredDevice>> scanForDevices() async* {
+    // No iOS o adaptador começa em "unknown"; escanear antes de "on" não acha nada.
+    try {
+      await FlutterBluePlus.adapterState
+          .firstWhere((s) => s == BluetoothAdapterState.on)
+          .timeout(const Duration(seconds: 6));
+    } on TimeoutException {
+      throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
+          'permita o acesso em Ajustes > AoFrio Test.');
+    }
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
+
+    yield* FlutterBluePlus.scanResults.map((results) {
+      lastSeenDevices = (results.toList()..sort((a, b) => b.rssi.compareTo(a.rssi)))
+          .map((r) => '${_nameOf(r).isEmpty ? '(sem nome)' : _nameOf(r)} ${r.rssi}dBm')
+          .take(8)
+          .toList();
       return results
-          .where((r) => r.device.platformName.isNotEmpty)
-          // O Wellington Monitor anuncia o nome BLE igual ao serial da
-          // etiqueta + sufixo (ex.: "B152E02371079226226"). Filtra por
-          // esse padrão para não confundir com outros periféricos BLE
-          // da sala (fones, carros, etc.).
-          .where((r) => _looksLikeWellingtonMonitor(r.device.platformName))
+          .where(_isWellingtonMonitor)
           .map((r) => DiscoveredDevice(
                 id: r.device.remoteId.str,
-                name: r.device.platformName,
+                name: _nameOf(r).isEmpty ? r.device.remoteId.str : _nameOf(r),
                 rssi: r.rssi,
               ))
           .toList();
     });
   }
+
+  /// No iOS `platformName` vem vazio antes de conectar; o nome anunciado
+  /// fica em `advName`.
+  static String _nameOf(ScanResult r) =>
+      r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : r.device.platformName;
+
+  /// Aceita quem anuncia o serviço SCS Asset Track ou tem nome no padrão do
+  /// serial da etiqueta (ex.: "B152E02371079226226").
+  static bool _isWellingtonMonitor(ScanResult r) =>
+      r.advertisementData.serviceUuids.any((u) => u.str128.toLowerCase() == assetTrackServiceUuid) ||
+      _looksLikeWellingtonMonitor(_nameOf(r));
 
   static bool _looksLikeWellingtonMonitor(String name) {
     // Serial da etiqueta sempre começa com "B15" neste lote; ajuste aqui

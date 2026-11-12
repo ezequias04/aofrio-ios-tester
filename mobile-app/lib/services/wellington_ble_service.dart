@@ -247,6 +247,59 @@ class WellingtonBleService implements IBleService {
   /// travado. Ajustável pela tela: quanto maior, mais pontos da curva.
   Duration liveCaptureWindow = const Duration(seconds: 20);
 
+  /// Telemetria ao vivo direto do anúncio BLE, SEM conexão e SEM auth.
+  /// Trava no Monitor de maior RSSI que estiver anunciando o payload 0x578
+  /// e emite uma leitura a cada atualização de anúncio. Fecha o scan quando
+  /// a tela cancelar a assinatura. Usa [AndroidScanMode.lowLatency] e
+  /// `continuousUpdates` para receber o mesmo sensor repetidamente.
+  Stream<LiveTelemetry> watchLiveTelemetry() async* {
+    try {
+      await FlutterBluePlus.adapterState
+          .firstWhere((s) => s == BluetoothAdapterState.on)
+          .timeout(const Duration(seconds: 6));
+    } on TimeoutException {
+      throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
+          'permita o acesso em Ajustes > AoFrio Test.');
+    }
+    await FlutterBluePlus.startScan(
+      continuousUpdates: true,
+      androidScanMode: AndroidScanMode.lowLatency,
+      androidUsesFineLocation: false,
+    );
+    try {
+      await for (final results in FlutterBluePlus.scanResults) {
+        ScanResult? best;
+        for (final r in results) {
+          if (r.advertisementData.manufacturerData[0x578] == null) continue;
+          if (!_isWellingtonMonitor(r)) continue;
+          if (best == null || r.rssi > best.rssi) best = r;
+        }
+        if (best == null) continue;
+        final w = best.advertisementData.manufacturerData[0x578]!;
+        yield LiveTelemetry(
+          at: DateTime.now(),
+          temperatureC: decodeAdvTemp(w),
+          rssi: best.rssi,
+          assetName: _asciiTail(w),
+          flagBytes: w.length >= 2 ? [w[0], w[1]] : List<int>.from(w),
+          rawHex: w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+        );
+      }
+    } finally {
+      await FlutterBluePlus.stopScan();
+    }
+  }
+
+  /// Nome do asset em ASCII imprimível no fim do payload (depois da temperatura).
+  static String _asciiTail(List<int> bytes) {
+    final sb = StringBuffer();
+    for (int i = 4; i < bytes.length; i++) {
+      final c = bytes[i];
+      if (c >= 32 && c <= 126) sb.writeCharCode(c);
+    }
+    return sb.toString().trim();
+  }
+
   /// Desconecta e fica ouvindo o anúncio do sensor por [duration], montando
   /// a curva de temperatura ao vivo a partir do campo livre de auth
   /// ([decodeAdvTemp]). Cada payload distinto vira um [SensorReading] com
@@ -628,6 +681,35 @@ class EventBlockHeader {
     required this.status,
     required this.protocolVersion,
     required this.reserved,
+  });
+}
+
+/// Telemetria ao vivo decodificada do anúncio BLE (sem conexão/auth).
+class LiveTelemetry {
+  final DateTime at;
+
+  /// Temperatura em °C, ou null se o payload ainda não decodificou.
+  final double? temperatureC;
+
+  final int rssi;
+
+  /// Nome/serial do asset anunciado (ASCII após a temperatura).
+  final String assetName;
+
+  /// Bytes 0-1 do payload (candidatos a flags de status/porta). O bit de
+  /// porta aberta ainda NÃO foi confirmado no hardware — a tela mostra estes
+  /// bytes em binário pra identificar qual muda ao abrir a porta.
+  final List<int> flagBytes;
+
+  final String rawHex;
+
+  const LiveTelemetry({
+    required this.at,
+    required this.temperatureC,
+    required this.rssi,
+    required this.assetName,
+    required this.flagBytes,
+    required this.rawHex,
   });
 }
 

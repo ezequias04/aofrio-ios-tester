@@ -14,6 +14,7 @@ import '../services/mock_ble_service.dart';
 import '../services/wellington_ble_service.dart';
 import '../theme/app_theme.dart';
 import 'asset_scanner_screen.dart';
+import 'live_monitor_screen.dart';
 import 'test_report_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -334,6 +335,21 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _statusText = value);
   }
 
+  Future<void> _openLiveMonitor() async {
+    final service = _currentBleService;
+    if (service is! WellingtonBleService) return;
+    try {
+      await _ensureBluetoothPermissions();
+    } catch (error) {
+      _showError(error.toString().replaceFirst('Exception: ', ''));
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => LiveMonitorScreen(service: service)),
+    );
+  }
+
   Future<void> _ensureBluetoothPermissions() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final statuses = await [
@@ -528,6 +544,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 .map((e) => DropdownMenuItem(value: e.value, child: Text(e.key, overflow: TextOverflow.ellipsis)))
                 .toList(),
             onChanged: _isLoading ? null : (value) => setState(() => _captureWindow = value ?? _captureWindow),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _isLoading ? null : _openLiveMonitor,
+            icon: const Icon(Icons.thermostat),
+            label: const Text('Ver temperatura em tempo real'),
           ),
         ],
         if (mock != null) ...[

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/sensor_reading.dart';
-import 'ble_service_interface.dart';
 
 /// Driver Bluetooth real para o sensor **Wellington Monitor (MON1-001)**.
 ///
@@ -38,7 +37,7 @@ import 'ble_service_interface.dart';
 ///   [parseEventBlockHeader]). Esse é o único gap real que falta — e dá
 ///   para fechar testando no hardware de verdade (não precisa mais de
 ///   decompilador nem de capturar o app oficial).
-class WellingtonBleService implements IBleService {
+class WellingtonBleService {
   BluetoothDevice? _connectedDevice;
   bool _isConnected = false;
 
@@ -145,7 +144,6 @@ class WellingtonBleService implements IBleService {
   /// layout ainda não foi decodificado (ver topo do arquivo).
   Stream<Uint8List> get rawEventBlocks => _eventBlockController.stream;
 
-  @override
   bool get isConnected => _isConnected;
 
   /// Nomes de todos os periféricos BLE vistos no último scan (diagnóstico:
@@ -160,7 +158,6 @@ class WellingtonBleService implements IBleService {
   /// temperatura que o sensor transmite sem autenticação.
   final Map<String, List<_AdvSample>> _advSamples = {};
 
-  @override
   Stream<List<DiscoveredDevice>> scanForDevices() async* {
     // No iOS o adaptador começa em "unknown"; escanear antes de "on" não acha nada.
     try {
@@ -253,7 +250,10 @@ class WellingtonBleService implements IBleService {
   /// primeiro). Mantém o último anúncio de cada sensor para a lista não
   /// "piscar" quando um pacote chega só de um deles. Usa
   /// [AndroidScanMode.lowLatency] e `continuousUpdates` para receber o mesmo
-  /// sensor repetidamente; continua em segundo plano no iOS (bluetooth-central).
+  /// sensor repetidamente.
+  ///
+  /// iOS: o anúncio de fabricante (0x578) NÃO chega com o app em segundo plano
+  /// sem filtro de serviço — mantenha o app em primeiro plano durante a leitura.
   Stream<List<LiveTelemetry>> watchAllLiveTelemetry() async* {
     try {
       await FlutterBluePlus.adapterState
@@ -292,6 +292,64 @@ class WellingtonBleService implements IBleService {
     } finally {
       await FlutterBluePlus.stopScan();
     }
+  }
+
+  /// Grava a curva de pull-down ao vivo pelo anúncio BLE, usando SÓ o decoder
+  /// confirmado no hardware ([decodeAdvTemp], centésimos de °C). Trava no sensor
+  /// de maior sinal na primeira leitura e o acompanha por [window], com horário
+  /// real (`DateTime.now()`). Registra um ponto quando a temperatura muda
+  /// (≥0.1 °C) ou a cada 15 s de estabilidade — nunca inventa leitura.
+  ///
+  /// iOS: exige o app em primeiro plano (anúncio de fabricante não chega em
+  /// background sem filtro de serviço). Por isso a UI pede "mantenha o app
+  /// aberto durante o ensaio".
+  Future<List<SensorReading>> captureLiveCurve(Duration window) async {
+    try {
+      await FlutterBluePlus.adapterState
+          .firstWhere((s) => s == BluetoothAdapterState.on)
+          .timeout(const Duration(seconds: 6));
+    } on TimeoutException {
+      throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
+          'permita o acesso em Ajustes > AoFrio Test.');
+    }
+    final readings = <SensorReading>[];
+    String? targetId;
+    double? lastTemp;
+    await FlutterBluePlus.startScan(
+      continuousUpdates: true,
+      androidScanMode: AndroidScanMode.lowLatency,
+      androidUsesFineLocation: false,
+    );
+    final deadline = DateTime.now().add(window);
+    try {
+      await for (final results in FlutterBluePlus.scanResults) {
+        ScanResult? best;
+        for (final r in results) {
+          final w = r.advertisementData.manufacturerData[0x578];
+          if (w == null || !_isWellingtonMonitor(r)) continue;
+          if (targetId != null && r.device.remoteId.str != targetId) continue;
+          if (best == null || r.rssi > best.rssi) best = r;
+        }
+        if (best != null) {
+          targetId ??= best.device.remoteId.str;
+          final t = decodeAdvTemp(best.advertisementData.manufacturerData[0x578]!);
+          if (t != null) {
+            final now = DateTime.now();
+            final changed = lastTemp == null || (t - lastTemp).abs() >= 0.1;
+            final stale = readings.isEmpty ||
+                now.difference(readings.last.timestamp).inSeconds >= 15;
+            if (changed || stale) {
+              readings.add(SensorReading(timestamp: now, temperature: t));
+              lastTemp = t;
+            }
+          }
+        }
+        if (DateTime.now().isAfter(deadline)) break;
+      }
+    } finally {
+      await FlutterBluePlus.stopScan();
+    }
+    return readings;
   }
 
   /// Nome do asset em ASCII imprimível no fim do payload (depois da temperatura).
@@ -363,12 +421,10 @@ class WellingtonBleService implements IBleService {
     return RegExp(r'^[A-Z0-9]{10,}$').hasMatch(name);
   }
 
-  @override
   Future<void> stopScan() async {
     await FlutterBluePlus.stopScan();
   }
 
-  @override
   Future<bool> connect(String deviceId) async {
     final device = BluetoothDevice.fromId(deviceId);
     await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
@@ -490,7 +546,10 @@ class WellingtonBleService implements IBleService {
     }
   }
 
-  @override
+  /// NÃO usado no laudo: o layout dos registros dentro do bloco de 1024 bytes
+  /// ainda não foi confirmado no hardware (ver aviso no topo). O laudo é gerado
+  /// por [captureLiveCurve], que usa só o decoder confirmado do anúncio.
+  /// Mantido para quando o formato do bloco for fechado via conexão.
   Future<List<SensorReading>> downloadStoredHistory() async {
     if (_connectedDevice == null) throw Exception('Nenhum sensor conectado.');
     if (_reqDataChar == null) throw Exception('Canal de comunicação não inicializado.');
@@ -658,7 +717,6 @@ class WellingtonBleService implements IBleService {
     );
   }
 
-  @override
   Future<void> disconnect() async {
     if (_connectedDevice != null) {
       await _connectedDevice!.disconnect();
@@ -727,4 +785,12 @@ class _AdvSample {
   final String hex;
   final List<int> bytes;
   const _AdvSample(this.at, this.hex, this.bytes);
+}
+
+/// Dispositivo BLE encontrado no scan (nome anunciado + sinal).
+class DiscoveredDevice {
+  final String id;
+  final String name;
+  final int rssi;
+  const DiscoveredDevice({required this.id, required this.name, required this.rssi});
 }

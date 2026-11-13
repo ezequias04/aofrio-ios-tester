@@ -30,7 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Janela de captura ao vivo do ensaio pull-down (o sensor transmite a
   /// temperatura no anúncio BLE; o app grava a curva durante este tempo).
-  /// Pode minimizar o app durante o ensaio — continua lendo em segundo plano.
+  /// iOS exige o app em primeiro plano — o anúncio não chega em background.
   static const _captureWindows = <String, Duration>{
     '2 min (teste rápido)': Duration(minutes: 2),
     '15 min': Duration(minutes: 15),
@@ -48,8 +48,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _serialController.text = 'BR-AOFRIO-9821';
-    _modelController.text = 'Expositor Comercial 450L (Metalfrio)';
     _responsibleController.text = 'Pereira';
     _loadLocalCount();
   }
@@ -187,27 +185,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() {
       _isLoading = true;
-      _statusText = 'Procurando sensor próximo…';
+      _statusText = 'Gravando curva ao vivo por ${_captureWindow.inMinutes} min… mantenha o app aberto.';
     });
 
     try {
       await _ensureBluetoothPermissions();
-      final devices = await _ble
-          .scanForDevices()
-          .firstWhere((items) => items.isNotEmpty)
-          .timeout(const Duration(seconds: 12));
-      await _ble.stopScan();
-      devices.sort((a, b) => b.rssi.compareTo(a.rssi));
-      final device = devices.first;
-      _setStatus('Conectando a ${device.name}…');
-      final connected = await _ble.connect(device.id);
-      if (!connected) throw Exception('O sensor recusou a conexão Bluetooth.');
-
-      _ble.liveCaptureWindow = _captureWindow;
-      _setStatus('Gravando curva ao vivo por ${_captureWindow.inMinutes} min… pode minimizar o app.');
-      final readings = await _ble.downloadStoredHistory();
-      if (readings.isEmpty) {
-        await _showBleDiagnostic(_ble.rawLog.join('\n'));
+      // Curva do laudo vem SÓ do decoder confirmado do anúncio BLE (centésimos
+      // de °C), sem conexão e sem dado inventado. iOS: app em primeiro plano.
+      final readings = await _ble.captureLiveCurve(_captureWindow);
+      if (readings.length < 5) {
+        _showError('O sensor não transmitiu leituras suficientes para o laudo. '
+            'Aproxime o aparelho do refrigerador e tente de novo.');
         return;
       }
       _setStatus('Analisando a curva térmica ISO 23953…');
@@ -219,17 +207,13 @@ class _HomeScreenState extends State<HomeScreen> {
         readings: readings,
       );
       await LocalReportStore.save(result);
-      await _ble.disconnect();
       if (!mounted) return;
       await Navigator.of(context).push(MaterialPageRoute(builder: (_) => TestReportScreen(result: result)));
       await _loadLocalCount();
-    } on TimeoutException {
-      _showNoSensorFound();
     } catch (error) {
       _showError(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       await _ble.stopScan();
-      await _ble.disconnect();
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -237,47 +221,6 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     }
-  }
-
-  Future<void> _showBleDiagnostic(String log) => showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Sensor conectou, mas não enviou leituras'),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: SelectableText(
-                'Toque em "Copiar diagnóstico" e envie o texto para o suporte. '
-                'Ele mostra os bytes que o sensor respondeu.\n\n$log',
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fechar')),
-            FilledButton.icon(
-              icon: const Icon(Icons.copy),
-              label: const Text('Copiar diagnóstico'),
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: log));
-                if (context.mounted) Navigator.of(context).pop();
-                _showError('Diagnóstico copiado. Cole no WhatsApp/e-mail para enviar.');
-              },
-            ),
-          ],
-        ),
-      );
-
-  void _showNoSensorFound() {
-    if (!mounted) return;
-    final seen = _ble.lastSeenDevices;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      duration: const Duration(seconds: 12),
-      content: Text(seen.isEmpty
-          ? 'Nenhum aparelho Bluetooth encontrado. Confira se o Bluetooth está ligado e permitido para o app.'
-          : 'Nenhum sensor AoFrio reconhecido. Aparelhos vistos:\n${seen.join('\n')}'),
-      backgroundColor: AppColors.slate,
-    ));
   }
 
   void _setStatus(String value) {
@@ -447,7 +390,7 @@ class _HomeScreenState extends State<HomeScreen> {
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Duração do ensaio ao vivo',
-              helperText: 'Pode minimizar o app durante o ensaio.',
+              helperText: 'Mantenha o app aberto e a tela ligada durante o ensaio.',
               prefixIcon: Icon(Icons.timer_outlined),
             ),
             items: _captureWindows.entries
@@ -483,7 +426,7 @@ class _LiveTile extends StatelessWidget {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('Temperatura em tempo real', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
                   SizedBox(height: 3),
-                  Text('Vê todos os sensores próximos ao vivo, sem conexão.', style: TextStyle(color: Color(0xFFD6EEF0), fontSize: 12)),
+                  Text('Vê todos os sensores próximos ao vivo, sem conexão.', style: TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w500)),
                 ]),
               ),
               const Icon(Icons.chevron_right, color: Colors.white),

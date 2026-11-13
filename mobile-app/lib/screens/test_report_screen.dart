@@ -30,32 +30,24 @@ class _TestReportScreenState extends State<TestReportScreen> {
       _syncMessage = null;
     });
 
-    final endpoints = [
-      '${AppConfig.apiBaseUrl}/api/tests',
-      'http://localhost:3000/api/tests',
-      'http://10.0.2.2:3000/api/tests',
-      'http://192.168.0.68:3000/api/tests',
-    ];
-
     bool success = false;
-    String? lastError;
 
-    for (final url in endpoints) {
-      try {
-        final uri = Uri.parse(url);
-        final response = await http.post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(widget.result.toJson()),
-        ).timeout(const Duration(seconds: 4));
+    try {
+      final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/tests');
+      final response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          if (AppConfig.canSync) 'Authorization': 'Bearer ${AppConfig.apiToken}',
+        },
+        body: jsonEncode(widget.result.toJson()),
+      ).timeout(const Duration(seconds: 8));
 
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          success = true;
-          break;
-        }
-      } catch (e) {
-        lastError = e.toString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        success = true;
       }
+    } catch (_) {
+      // Sem rede/portal fora do ar: cai no salvo-localmente abaixo.
     }
 
     if (success) {
@@ -100,7 +92,6 @@ MÉTRICAS TÉRMICAS:
 • Duração do Pull-Down: ${r.durationMinutes} minutos
 • Tempo Limite Permitido: ${r.effectiveAllowedMinutes} minutos
 • Taxa Média de Resfriamento: ${r.coolingRate.toStringAsFixed(2)}°C/min
-• Aberturas de Porta Registradas: ${r.doorOpenEvents}
 
 PARECER TÉCNICO:
 ${r.verdictReason}
@@ -372,7 +363,6 @@ class _DetailsCard extends StatelessWidget {
         _Detail(label: 'Perfil', value: result.profile.name.split(' (').first),
         _Detail(label: 'Setpoint', value: '${result.profile.targetTemperature}°C'),
         _Detail(label: 'Tempo permitido', value: '${result.effectiveAllowedMinutes} min'),
-        _Detail(label: 'Aberturas de porta', value: '${result.doorOpenEvents}'),
         _Detail(label: 'ID do laudo', value: result.testId, last: true),
       ]),
     ),

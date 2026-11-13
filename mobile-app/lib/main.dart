@@ -21,7 +21,7 @@ class AoFrioTestingApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AoFrio Test',
+      title: 'ColdTrack Pro',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       themeMode: ThemeMode.light,

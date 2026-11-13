@@ -45,7 +45,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.9 # mesma versão que compila o APK localmente
+          flutter-version: '3.24.x'
           cache: true
       - run: flutter pub get
       - name: flutter build apk --release

@@ -82,7 +82,7 @@ class _TestReportScreenState extends State<TestReportScreen> {
   void _copyOfficialReport() {
     final r = widget.result;
     final passed = r.status == TestStatus.aprovada;
-    final statusStr = passed ? 'APROVADA ✅' : 'REPROVADA ❌';
+    final statusStr = passed ? 'APROVADA (CONFORME)' : 'REPROVADA (NÃO CONFORME)';
 
     final text = '''
 📋 LAUDO DE ENSAIO PULL-DOWN ISO 23953
@@ -242,7 +242,7 @@ class _VerdictCard extends StatelessWidget {
           CircleAvatar(
             radius: 26,
             backgroundColor: color.withValues(alpha: .12),
-            child: Icon(passed ? Icons.check_circle_rounded : Icons.highlight_off_rounded, color: color, size: 32),
+            child: Icon(passed ? Icons.check_circle_rounded : Icons.warning_amber_rounded, color: color, size: 32),
           ),
           const SizedBox(width: 14),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

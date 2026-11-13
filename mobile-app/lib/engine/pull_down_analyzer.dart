@@ -139,6 +139,23 @@ class PullDownAnalyzer {
       }
     }
 
+    // Checagem de segurança contra congelamento (Padrão Coca-Cola / Sub-Zero)
+    if (profile.safetyMinTemperature != null) {
+      final subZeroViolations = testSlice.where((r) => r.temperature < profile.safetyMinTemperature!).toList();
+      if (subZeroViolations.isNotEmpty) {
+        final lowestTemp = subZeroViolations.map((r) => r.temperature).reduce((a, b) => a < b ? a : b);
+        verdictReason += ' ⚠️ ALERTA DE SEGURANÇA: Registrada temperatura de ${lowestTemp.toStringAsFixed(1)}°C '
+            '(abaixo do limite seguro de ${profile.safetyMinTemperature}°C). Risco de congelamento indevido de produto.';
+      }
+    }
+
+    // Registro de Auditoria de Partida (T0)
+    if (initialTemp < profile.minStartingAmbientTemp) {
+      verdictReason += ' [Auditoria: Partida com Gabinete Pré-Resfriado a ${initialTemp.toStringAsFixed(1)}°C (Recomendado: ≥ ${profile.minStartingAmbientTemp}°C)].';
+    } else {
+      verdictReason += ' [Auditoria: Baseline T0 Validado em Repouso Térmico a ${initialTemp.toStringAsFixed(1)}°C].';
+    }
+
     return _buildResult(
       serialNumber: serialNumber,
       modelName: modelName,

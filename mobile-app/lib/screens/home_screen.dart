@@ -14,6 +14,7 @@ import '../services/wellington_ble_service.dart';
 import '../theme/app_theme.dart';
 import 'equipment_link_wizard_dialog.dart';
 import 'session_live_screen.dart';
+import 'standards_guide_screen.dart';
 import 'test_report_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -351,6 +352,15 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('ISO Test • Bancada'),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const StandardsGuideScreen()),
+              );
+            },
+            icon: const Icon(Icons.menu_book_outlined),
+            tooltip: 'Guia de Normas & Ensaios',
+          ),
           TextButton.icon(
             onPressed: _showSavedReportsModal,
             icon: const Icon(Icons.history, size: 20),

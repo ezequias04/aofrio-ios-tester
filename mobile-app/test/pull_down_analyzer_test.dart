@@ -8,6 +8,7 @@ void main() {
   const profile = TestProfile(
     id: 'test',
     name: 'Perfil de teste',
+    standardName: 'Padrão de teste',
     targetTemperature: 4,
     manualMaxAllowedMinutes: 90,
   );

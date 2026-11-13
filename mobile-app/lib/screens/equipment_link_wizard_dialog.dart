@@ -719,7 +719,40 @@ class _EquipmentLinkWizardDialogState extends State<EquipmentLinkWizardDialog> {
             if (d != null) setState(() => _selectedDuration = d);
           },
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
+
+        // Check de Prontidão de Auditoria (Ponto T0)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.success.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.verified, size: 18, color: AppColors.success),
+                  SizedBox(width: 8),
+                  Text(
+                    'CHECK DE PRONTIDÃO DE AUDITORIA (PONTO T0)',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.success, letterSpacing: 0.8),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '• Gabinete em repouso térmico verificado (Baseline ≥ ${_selectedProfile.minStartingAmbientTemp}°C)\n'
+                '• Intertravamento de porta fechada monitorado pelo sensor AoFrio\n'
+                '• Inflexão térmica e tempo oficial cravados na memória flash',
+                style: const TextStyle(fontSize: 12, color: AppColors.ink, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
 
         // Resumo do Vínculo
         Container(
@@ -739,7 +772,8 @@ class _EquipmentLinkWizardDialogState extends State<EquipmentLinkWizardDialog> {
               const SizedBox(height: 10),
               _SummaryRow(label: 'Sensor:', value: '${_selectedDevice?.name} (${_selectedDevice?.id})'),
               _SummaryRow(label: 'Equipamento:', value: '${_serialController.text} • ${_modelController.text}'),
-              _SummaryRow(label: 'Norma/Perfil:', value: '${_selectedProfile.name} (Alvo: ${_selectedProfile.targetTemperature}°C)'),
+              _SummaryRow(label: 'Norma / Padrão:', value: _selectedProfile.standardName),
+              _SummaryRow(label: 'Setpoint Alvo:', value: '${_selectedProfile.targetTemperature}°C (Faixa: ${_selectedProfile.minTemperature}°C a ${_selectedProfile.maxTemperature}°C)'),
               _SummaryRow(label: 'Responsável:', value: _technicianController.text),
               _SummaryRow(label: 'Duração:', value: '${_selectedDuration.inMinutes} minutos'),
             ],

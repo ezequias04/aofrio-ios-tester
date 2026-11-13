@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aofrio-refrigeration",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-09",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aofrio-refrigeration-prod",
+      "database_id": "96d70e67-9168-4c30-a5ba-7637a3e807ce"
+    }
+  ]
+}

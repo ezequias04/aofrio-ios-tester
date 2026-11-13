@@ -1,31 +1,23 @@
 import 'package:flutter/material.dart';
-import 'services/mock_ble_service.dart';
 import 'screens/home_screen.dart';
 import 'theme/app_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Inicia com o MockBleService por padrão
-  // O usuário pode alternar em tempo real no app para WellingtonBleService
-  final bleService = MockBleService();
-
-  runApp(IsoTestingApp(bleService: bleService));
+  runApp(const IsoTestingApp());
 }
 
 class IsoTestingApp extends StatelessWidget {
-  final MockBleService bleService;
-
-  const IsoTestingApp({super.key, required this.bleService});
+  const IsoTestingApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ISO Test',
+      title: 'AoFrio Test',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       themeMode: ThemeMode.light,
-      home: HomeScreen(initialBleService: bleService),
+      home: const HomeScreen(),
     );
   }
 }

@@ -1,11 +1,11 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/wellington_ble_service.dart';
 import '../theme/app_theme.dart';
 
-/// Monitor em tempo real: lê a temperatura que o sensor Wellington/AoFrio
-/// transmite no anúncio BLE, sem conexão e sem autenticação. Trava no sensor
-/// de maior sinal e atualiza a cada anúncio novo.
+/// Monitor em tempo real: lê a temperatura que os sensores Wellington/AoFrio
+/// transmitem no anúncio BLE, sem conexão e sem autenticação. Mostra TODOS os
+/// sensores próximos ao mesmo tempo, cada um atualizando ao vivo. Continua
+/// lendo com o app minimizado (iOS bluetooth-central / scan em background).
 class LiveMonitorScreen extends StatefulWidget {
   final WellingtonBleService service;
   const LiveMonitorScreen({super.key, required this.service});
@@ -15,14 +15,12 @@ class LiveMonitorScreen extends StatefulWidget {
 }
 
 class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
-  late final Stream<LiveTelemetry> _stream;
+  late final Stream<List<LiveTelemetry>> _stream;
 
   @override
   void initState() {
     super.initState();
-    // Stream único (broadcast implícito pelo StreamBuilder); ao sair da tela
-    // o cancelamento fecha o scan via finally do watchLiveTelemetry.
-    _stream = widget.service.watchLiveTelemetry();
+    _stream = widget.service.watchAllLiveTelemetry();
   }
 
   @override
@@ -31,9 +29,9 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     super.dispose();
   }
 
-  Color _tempColor(double? t) {
+  static Color tempColor(double? t) {
     if (t == null) return AppColors.slate;
-    if (t <= 5) return AppColors.success; // faixa fria normal de expositor
+    if (t <= 5) return AppColors.success;
     if (t <= 10) return AppColors.ocean;
     return AppColors.danger;
   }
@@ -41,9 +39,9 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Temperatura em tempo real')),
+      appBar: AppBar(title: const Text('Sensores em tempo real')),
       body: SafeArea(
-        child: StreamBuilder<LiveTelemetry>(
+        child: StreamBuilder<List<LiveTelemetry>>(
           stream: _stream,
           builder: (context, snap) {
             if (snap.hasError) {
@@ -55,36 +53,29 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
             if (!snap.hasData) {
               return const _Message(
                 icon: Icons.bluetooth_searching,
-                text: 'Procurando o sensor…\nAproxime o aparelho do refrigerador.',
+                text: 'Procurando sensores…\nAproxime o aparelho dos refrigeradores.',
                 showSpinner: true,
               );
             }
-            final t = snap.data!;
-            return Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    if (t.assetName.isNotEmpty)
-                      Text(t.assetName,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w800, color: AppColors.ink)),
-                    const SizedBox(height: 18),
-                    _TempDial(temp: t.temperatureC, color: _tempColor(t.temperatureC)),
-                    const SizedBox(height: 8),
-                    _LiveDot(at: t.at),
-                    const SizedBox(height: 24),
-                    Row(children: [
-                      Expanded(child: _Stat(label: 'Sinal', value: '${t.rssi} dBm', icon: Icons.wifi)),
-                      const SizedBox(width: 12),
-                      Expanded(child: _DoorCard(flagBytes: t.flagBytes)),
+            final list = snap.data!;
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              itemCount: list.length + 1,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, i) {
+                if (i == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(children: [
+                      Container(width: 9, height: 9, decoration: const BoxDecoration(color: AppColors.success, shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Text('${list.length} sensor${list.length == 1 ? '' : 'es'} ao vivo',
+                          style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink)),
                     ]),
-                    const SizedBox(height: 16),
-                    _RawCard(hex: t.rawHex),
-                  ]),
-                ),
-              ),
+                  );
+                }
+                return _SensorCard(t: list[i - 1]);
+              },
             );
           },
         ),
@@ -93,109 +84,70 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   }
 }
 
-class _TempDial extends StatelessWidget {
-  final double? temp;
-  final Color color;
-  const _TempDial({required this.temp, required this.color});
+class _SensorCard extends StatelessWidget {
+  final LiveTelemetry t;
+  const _SensorCard({required this.t});
 
   @override
   Widget build(BuildContext context) {
+    final color = _LiveMonitorScreenState.tempColor(t.temperatureC);
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: color.withValues(alpha: 0.35), width: 2),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.line),
       ),
-      child: Column(children: [
-        Text(
-          temp == null ? '—' : temp!.toStringAsFixed(1),
-          style: TextStyle(fontSize: 88, height: 1, fontWeight: FontWeight.w900, color: color),
-        ),
-        const SizedBox(height: 4),
-        Text('°C',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: color)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(
+              t.assetName.isEmpty ? t.deviceId : t.assetName,
+              style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink, fontSize: 15),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const Icon(Icons.wifi, size: 14, color: AppColors.slate),
+          const SizedBox(width: 4),
+          Text('${t.rssi} dBm', style: const TextStyle(color: AppColors.slate, fontSize: 12)),
+        ]),
+        const SizedBox(height: 10),
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(
+            t.temperatureC == null ? '—' : t.temperatureC!.toStringAsFixed(1),
+            style: TextStyle(fontSize: 52, height: 1, fontWeight: FontWeight.w900, color: color),
+          ),
+          const SizedBox(width: 4),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text('°C', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: color)),
+          ),
+          const Spacer(),
+          _DoorFlags(flagBytes: t.flagBytes),
+        ]),
       ]),
     );
   }
 }
 
-class _LiveDot extends StatelessWidget {
-  final DateTime at;
-  const _LiveDot({required this.at});
-  @override
-  Widget build(BuildContext context) {
-    final hhmmss = at.toIso8601String().substring(11, 19);
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 9, height: 9, decoration: const BoxDecoration(color: AppColors.success, shape: BoxShape.circle)),
-      const SizedBox(width: 7),
-      Text('ao vivo • atualizado $hhmmss', style: const TextStyle(color: AppColors.slate, fontSize: 12)),
-    ]);
-  }
-}
-
-class _Stat extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  const _Stat({required this.label, required this.value, required this.icon});
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: AppColors.ice, borderRadius: BorderRadius.circular(16)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(icon, color: AppColors.ocean, size: 20),
-          const SizedBox(height: 8),
-          Text(label, style: const TextStyle(color: AppColors.slate, fontSize: 12)),
-          const SizedBox(height: 2),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink)),
-        ]),
-      );
-}
-
-/// Porta: o bit de "porta aberta" ainda não foi confirmado neste payload.
-/// Mostra os bytes de flag em binário pra identificar no hardware qual muda
-/// ao abrir a porta. Nunca afirma um estado que não foi comprovado.
-class _DoorCard extends StatelessWidget {
+/// Bit de "porta aberta" ainda NÃO confirmado neste payload. Mostra os bytes
+/// de flag em binário pra identificar no hardware qual muda ao abrir a porta.
+class _DoorFlags extends StatelessWidget {
   final List<int> flagBytes;
-  const _DoorCard({required this.flagBytes});
+  const _DoorFlags({required this.flagBytes});
   @override
   Widget build(BuildContext context) {
     final bits = flagBytes.map((b) => b.toRadixString(2).padLeft(8, '0')).join(' ');
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: AppColors.ice, borderRadius: BorderRadius.circular(16)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.sensor_door_outlined, color: AppColors.ocean, size: 20),
-        const SizedBox(height: 8),
-        const Text('Flags (porta?)', style: TextStyle(color: AppColors.slate, fontSize: 12)),
-        const SizedBox(height: 2),
-        Text(bits, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w800, color: AppColors.ink, fontSize: 13)),
-        const SizedBox(height: 4),
-        const Text('abra a porta e veja qual bit muda',
-            style: TextStyle(color: AppColors.slate, fontSize: 10)),
+    return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      Row(mainAxisSize: MainAxisSize.min, children: const [
+        Icon(Icons.sensor_door_outlined, size: 14, color: AppColors.slate),
+        SizedBox(width: 4),
+        Text('porta?', style: TextStyle(color: AppColors.slate, fontSize: 11)),
       ]),
-    );
+      const SizedBox(height: 2),
+      Text(bits, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, color: AppColors.ink, fontSize: 12)),
+    ]);
   }
-}
-
-class _RawCard extends StatelessWidget {
-  final String hex;
-  const _RawCard({required this.hex});
-  @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF2F5F8),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Anúncio bruto (0x578)', style: TextStyle(color: AppColors.slate, fontSize: 11)),
-          const SizedBox(height: 4),
-          SelectableText(hex, style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: AppColors.ink)),
-        ]),
-      );
 }
 
 class _Message extends StatelessWidget {

@@ -247,12 +247,14 @@ class WellingtonBleService implements IBleService {
   /// travado. Ajustável pela tela: quanto maior, mais pontos da curva.
   Duration liveCaptureWindow = const Duration(seconds: 20);
 
-  /// Telemetria ao vivo direto do anúncio BLE, SEM conexão e SEM auth.
-  /// Trava no Monitor de maior RSSI que estiver anunciando o payload 0x578
-  /// e emite uma leitura a cada atualização de anúncio. Fecha o scan quando
-  /// a tela cancelar a assinatura. Usa [AndroidScanMode.lowLatency] e
-  /// `continuousUpdates` para receber o mesmo sensor repetidamente.
-  Stream<LiveTelemetry> watchLiveTelemetry() async* {
+  /// Telemetria ao vivo de TODOS os sensores próximos, direto do anúncio BLE,
+  /// SEM conexão e SEM auth. A cada atualização emite a lista de todos os
+  /// Monitors que anunciam o payload 0x578, ordenada por sinal (maior RSSI
+  /// primeiro). Mantém o último anúncio de cada sensor para a lista não
+  /// "piscar" quando um pacote chega só de um deles. Usa
+  /// [AndroidScanMode.lowLatency] e `continuousUpdates` para receber o mesmo
+  /// sensor repetidamente; continua em segundo plano no iOS (bluetooth-central).
+  Stream<List<LiveTelemetry>> watchAllLiveTelemetry() async* {
     try {
       await FlutterBluePlus.adapterState
           .firstWhere((s) => s == BluetoothAdapterState.on)
@@ -261,6 +263,7 @@ class WellingtonBleService implements IBleService {
       throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
           'permita o acesso em Ajustes > AoFrio Test.');
     }
+    final latest = <String, LiveTelemetry>{};
     await FlutterBluePlus.startScan(
       continuousUpdates: true,
       androidScanMode: AndroidScanMode.lowLatency,
@@ -268,22 +271,23 @@ class WellingtonBleService implements IBleService {
     );
     try {
       await for (final results in FlutterBluePlus.scanResults) {
-        ScanResult? best;
         for (final r in results) {
-          if (r.advertisementData.manufacturerData[0x578] == null) continue;
-          if (!_isWellingtonMonitor(r)) continue;
-          if (best == null || r.rssi > best.rssi) best = r;
+          final w = r.advertisementData.manufacturerData[0x578];
+          if (w == null || !_isWellingtonMonitor(r)) continue;
+          final id = r.device.remoteId.str;
+          latest[id] = LiveTelemetry(
+            deviceId: id,
+            at: DateTime.now(),
+            temperatureC: decodeAdvTemp(w),
+            rssi: r.rssi,
+            assetName: _asciiTail(w).isNotEmpty ? _asciiTail(w) : _nameOf(r),
+            flagBytes: w.length >= 2 ? [w[0], w[1]] : List<int>.from(w),
+            rawHex: w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+          );
         }
-        if (best == null) continue;
-        final w = best.advertisementData.manufacturerData[0x578]!;
-        yield LiveTelemetry(
-          at: DateTime.now(),
-          temperatureC: decodeAdvTemp(w),
-          rssi: best.rssi,
-          assetName: _asciiTail(w),
-          flagBytes: w.length >= 2 ? [w[0], w[1]] : List<int>.from(w),
-          rawHex: w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
-        );
+        if (latest.isEmpty) continue;
+        final list = latest.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
+        yield list;
       }
     } finally {
       await FlutterBluePlus.stopScan();
@@ -686,6 +690,9 @@ class EventBlockHeader {
 
 /// Telemetria ao vivo decodificada do anúncio BLE (sem conexão/auth).
 class LiveTelemetry {
+  /// Id BLE do sensor (chave da lista multi-sensor).
+  final String deviceId;
+
   final DateTime at;
 
   /// Temperatura em °C, ou null se o payload ainda não decodificou.
@@ -704,6 +711,7 @@ class LiveTelemetry {
   final String rawHex;
 
   const LiveTelemetry({
+    required this.deviceId,
     required this.at,
     required this.temperatureC,
     required this.rssi,

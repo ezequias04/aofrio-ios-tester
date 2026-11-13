@@ -1,45 +1,57 @@
 import 'dart:async';
-import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../models/sensor_reading.dart';
+import '../engine/pull_down_analyzer.dart';
 import '../models/test_profile.dart';
 import '../models/test_result.dart';
-import '../models/test_session.dart';
-import '../services/ble_service_interface.dart';
 import '../services/local_report_store.dart';
-import '../services/mock_ble_service.dart';
 import '../services/wellington_ble_service.dart';
 import '../theme/app_theme.dart';
-import 'equipment_link_wizard_dialog.dart';
-import 'session_live_screen.dart';
-import 'standards_guide_screen.dart';
+import 'asset_scanner_screen.dart';
+import 'live_monitor_screen.dart';
 import 'test_report_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  final IBleService initialBleService;
-  const HomeScreen({super.key, required this.initialBleService});
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late IBleService _currentBleService;
-  bool _useRealBle = false;
-  int _localReportCount = 0;
+  final _formKey = GlobalKey<FormState>();
+  final _serialController = TextEditingController();
+  final _modelController = TextEditingController();
+  final _responsibleController = TextEditingController();
+  TestProfile _selectedProfile = TestProfile.defaultProfiles.first;
 
-  // Bancada de testes: suporta múltiplos equipamentos monitorados simultaneamente
-  final List<TestSession> _activeSessions = [];
-  Timer? _benchTelemetryTimer;
+  /// Janela de captura ao vivo do ensaio pull-down (o sensor transmite a
+  /// temperatura no anúncio BLE; o app grava a curva durante este tempo).
+  /// Pode minimizar o app durante o ensaio — continua lendo em segundo plano.
+  static const _captureWindows = <String, Duration>{
+    '2 min (teste rápido)': Duration(minutes: 2),
+    '15 min': Duration(minutes: 15),
+    '30 min': Duration(minutes: 30),
+    '1 hora': Duration(hours: 1),
+    '2 horas (pull-down completo)': Duration(hours: 2),
+  };
+  Duration _captureWindow = const Duration(minutes: 30);
+
+  final WellingtonBleService _ble = WellingtonBleService();
+  bool _isLoading = false;
+  int _localReportCount = 0;
+  String _statusText = 'Pronto para iniciar';
 
   @override
   void initState() {
     super.initState();
-    _currentBleService = widget.initialBleService;
+    _serialController.text = 'BR-AOFRIO-9821';
+    _modelController.text = 'Expositor Comercial 450L (Metalfrio)';
+    _responsibleController.text = 'Pereira';
     _loadLocalCount();
-    _startBenchTelemetryTimer();
   }
 
   Future<void> _loadLocalCount() async {
@@ -49,191 +61,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _benchTelemetryTimer?.cancel();
-    for (final s in _activeSessions) {
-      s.dispose();
-    }
-    unawaited(_currentBleService.disconnect());
+    _serialController.dispose();
+    _modelController.dispose();
+    _responsibleController.dispose();
+    unawaited(_ble.disconnect());
     super.dispose();
   }
 
-  /// Timer central que atualiza as leituras térmicas dos equipamentos ativos
-  void _startBenchTelemetryTimer() {
-    _benchTelemetryTimer?.cancel();
-    final random = Random();
-
-    _benchTelemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted || _activeSessions.isEmpty) return;
-
-      setState(() {
-        for (final session in _activeSessions) {
-          double newTemp = session.currentTemperature;
-
-          if (!_useRealBle) {
-            // Em modo simulação, reduz a temperatura gradualmente até o alvo
-            final target = session.profile.targetTemperature;
-            if (newTemp > target) {
-              final drop = 0.25 + random.nextDouble() * 0.15;
-              newTemp = max(target, newTemp - drop);
-            } else {
-              // Estabilização com leve oscilação natural
-              newTemp = target + (sin(session.elapsedTime.inSeconds / 20.0) * 0.3);
-            }
-          }
-
-          session.addReading(
-            double.parse(newTemp.toStringAsFixed(1)),
-            isDoorOpen: session.doorOpen,
-            isCompOn: session.compressorOn,
-          );
-        }
-      });
-    });
+  String? _required(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Preencha este campo.';
+    return null;
   }
 
-  void _toggleBleMode(bool real) {
-    if (_useRealBle == real) return;
-    unawaited(_currentBleService.disconnect());
-    setState(() {
-      _useRealBle = real;
-      _currentBleService = real ? WellingtonBleService() : MockBleService();
-    });
-  }
-
-  Future<void> _openLinkWizard() async {
-    if (_useRealBle) {
-      final bleGranted = await _ensureBluetoothPermissions();
-      if (!bleGranted && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ative as permissões de Bluetooth para buscar sensores físicos.'),
-            backgroundColor: AppColors.warning,
-          ),
-        );
-      }
-    }
-
-    if (!mounted) return;
-
-    final alreadyLinkedIds = _activeSessions.map((s) => s.sensorDevice.id).toList();
-
-    final newSession = await showDialog<TestSession>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => EquipmentLinkWizardDialog(
-        bleService: _currentBleService,
-        isSimulation: !_useRealBle,
-        alreadyLinkedSensorIds: alreadyLinkedIds,
-      ),
+  Future<void> _scanAsset() async {
+    final value = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const AssetScannerScreen()),
     );
-
-    if (newSession != null && mounted) {
-      setState(() {
-        _activeSessions.add(newSession);
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Equipamento ${newSession.equipmentSerial} vinculado ao sensor ${newSession.sensorDevice.name} com sucesso!',
-          ),
-          backgroundColor: AppColors.success,
-        ),
-      );
+    if (value != null && mounted) {
+      _serialController.text = value;
+      _formKey.currentState?.validate();
     }
   }
 
-  Future<bool> _ensureBluetoothPermissions() async {
+  Future<void> _openLiveMonitor() async {
     try {
-      final scanStatus = await Permission.bluetoothScan.request();
-      final connectStatus = await Permission.bluetoothConnect.request();
-      return scanStatus.isGranted && connectStatus.isGranted;
-    } catch (_) {
-      return true;
+      await _ensureBluetoothPermissions();
+    } catch (error) {
+      _showError(error.toString().replaceFirst('Exception: ', ''));
+      return;
     }
-  }
-
-  void _openSessionDetail(TestSession session) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SessionLiveScreen(
-          session: session,
-          onSessionFinished: () {
-            setState(() {
-              _activeSessions.removeWhere((s) => s.id == session.id);
-            });
-            _loadLocalCount();
-          },
-        ),
-      ),
-    );
-  }
-
-  Future<void> _finishSession(TestSession session) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Finalizar Ensaio e Gerar Laudo?'),
-        content: Text(
-          'Deseja concluir o ensaio pull-down da geladeira ${session.equipmentSerial} (${session.equipmentModel})?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Voltar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Finalizar & Emitir Laudo'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
-    final result = session.finishTest();
-    await LocalReportStore.save(result);
-
-    setState(() {
-      _activeSessions.removeWhere((s) => s.id == session.id);
-    });
-    await _loadLocalCount();
-
     if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => TestReportScreen(result: result)),
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => LiveMonitorScreen(service: _ble)),
     );
-  }
-
-  Future<void> _unlinkSession(TestSession session) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Desvincular Equipamento?'),
-        content: Text(
-          'Deseja remover o equipamento ${session.equipmentSerial} da bancada de teste sem gerar laudo?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
-            child: const Text('Desvincular'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      session.dispose();
-      setState(() {
-        _activeSessions.removeWhere((s) => s.id == session.id);
-      });
-    }
   }
 
   Future<void> _showSavedReportsModal() async {
@@ -264,16 +124,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         const Text(
                           'Laudos Salvos no Aparelho',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.ink,
-                          ),
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.ink),
                         ),
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Fechar'),
-                        ),
+                        IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(context).pop()),
                       ],
                     ),
                     const SizedBox(height: 10),
@@ -281,7 +134,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const Expanded(
                         child: Center(
                           child: Text(
-                            'Nenhum laudo salvo offline ainda.\nVincule um equipamento e execute um ensaio para registrar.',
+                            'Nenhum laudo salvo offline ainda.\nExecute um ensaio para registrar.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: AppColors.slate),
                           ),
@@ -297,20 +150,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             final passed = r.status == TestStatus.aprovada;
                             return ListTile(
                               leading: CircleAvatar(
-                                backgroundColor: passed ? AppColors.ice : const Color(0xFFFFF3E0),
-                                child: Icon(
-                                  passed ? Icons.check_circle : Icons.warning_amber_rounded,
-                                  color: passed ? AppColors.success : const Color(0xFFE65100),
-                                ),
+                                backgroundColor: passed ? AppColors.ice : const Color(0xFFFFEBEE),
+                                child: Icon(passed ? Icons.check_circle : Icons.cancel, color: passed ? AppColors.success : AppColors.danger),
                               ),
-                              title: Text(
-                                '${r.serialNumber} • ${r.modelName}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                              ),
-                              subtitle: Text(
-                                '${r.durationMinutes} min • ${r.finalTemp}°C • ${r.technicianName}',
-                                style: const TextStyle(fontSize: 12),
-                              ),
+                              title: Text('${r.serialNumber} • ${r.modelName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              subtitle: Text('${r.durationMinutes} min • ${r.finalTemp}°C • ${r.technicianName}', style: const TextStyle(fontSize: 12)),
                               trailing: IconButton(
                                 icon: const Icon(Icons.delete_outline, color: AppColors.slate),
                                 onPressed: () async {
@@ -322,9 +166,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               onTap: () {
                                 Navigator.of(context).pop();
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(builder: (_) => TestReportScreen(result: r)),
-                                );
+                                Navigator.of(context).push(MaterialPageRoute(builder: (_) => TestReportScreen(result: r)));
                               },
                             );
                           },
@@ -340,401 +182,349 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Color _tempColor(double temp, TestProfile profile) {
-    if (temp <= profile.targetTemperature) return AppColors.success;
-    if (temp <= profile.maxTemperature) return AppColors.ocean;
-    return AppColors.warning;
+  Future<void> _runAudit() async {
+    FocusScope.of(context).unfocus();
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() {
+      _isLoading = true;
+      _statusText = 'Procurando sensor próximo…';
+    });
+
+    try {
+      await _ensureBluetoothPermissions();
+      final devices = await _ble
+          .scanForDevices()
+          .firstWhere((items) => items.isNotEmpty)
+          .timeout(const Duration(seconds: 12));
+      await _ble.stopScan();
+      devices.sort((a, b) => b.rssi.compareTo(a.rssi));
+      final device = devices.first;
+      _setStatus('Conectando a ${device.name}…');
+      final connected = await _ble.connect(device.id);
+      if (!connected) throw Exception('O sensor recusou a conexão Bluetooth.');
+
+      _ble.liveCaptureWindow = _captureWindow;
+      _setStatus('Gravando curva ao vivo por ${_captureWindow.inMinutes} min… pode minimizar o app.');
+      final readings = await _ble.downloadStoredHistory();
+      if (readings.isEmpty) {
+        await _showBleDiagnostic(_ble.rawLog.join('\n'));
+        return;
+      }
+      _setStatus('Analisando a curva térmica ISO 23953…');
+      final result = PullDownAnalyzer.analyze(
+        serialNumber: _serialController.text.trim(),
+        modelName: _modelController.text.trim(),
+        technicianName: _responsibleController.text.trim(),
+        profile: _selectedProfile,
+        readings: readings,
+      );
+      await LocalReportStore.save(result);
+      await _ble.disconnect();
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => TestReportScreen(result: result)));
+      await _loadLocalCount();
+    } on TimeoutException {
+      _showNoSensorFound();
+    } catch (error) {
+      _showError(error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      await _ble.stopScan();
+      await _ble.disconnect();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusText = 'Pronto para iniciar';
+        });
+      }
+    }
+  }
+
+  Future<void> _showBleDiagnostic(String log) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Sensor conectou, mas não enviou leituras'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                'Toque em "Copiar diagnóstico" e envie o texto para o suporte. '
+                'Ele mostra os bytes que o sensor respondeu.\n\n$log',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fechar')),
+            FilledButton.icon(
+              icon: const Icon(Icons.copy),
+              label: const Text('Copiar diagnóstico'),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: log));
+                if (context.mounted) Navigator.of(context).pop();
+                _showError('Diagnóstico copiado. Cole no WhatsApp/e-mail para enviar.');
+              },
+            ),
+          ],
+        ),
+      );
+
+  void _showNoSensorFound() {
+    if (!mounted) return;
+    final seen = _ble.lastSeenDevices;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 12),
+      content: Text(seen.isEmpty
+          ? 'Nenhum aparelho Bluetooth encontrado. Confira se o Bluetooth está ligado e permitido para o app.'
+          : 'Nenhum sensor AoFrio reconhecido. Aparelhos vistos:\n${seen.join('\n')}'),
+      backgroundColor: AppColors.slate,
+    ));
+  }
+
+  void _setStatus(String value) {
+    if (mounted) setState(() => _statusText = value);
+  }
+
+  Future<void> _ensureBluetoothPermissions() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final statuses = await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.locationWhenInUse,
+    ].request();
+    final denied = statuses.values.any((status) => status.isDenied || status.isPermanentlyDenied);
+    if (denied) {
+      throw Exception('Autorize Bluetooth e dispositivos próximos nas configurações para localizar o sensor.');
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: AppColors.danger,
+      action: SnackBarAction(label: 'Fechar', textColor: Colors.white, onPressed: () {}),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF6F9FB),
       appBar: AppBar(
-        title: const Text('ISO Test • Bancada'),
+        backgroundColor: const Color(0xFFF6F9FB),
+        surfaceTintColor: Colors.transparent,
+        title: const Row(mainAxisSize: MainAxisSize.min, children: [
+          _BrandMark(), SizedBox(width: 11), Text('AoFrio Test'),
+        ]),
         actions: [
-          IconButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const StandardsGuideScreen()),
-              );
-            },
-            icon: const Icon(Icons.menu_book_outlined),
-            tooltip: 'Guia de Normas & Ensaios',
-          ),
-          TextButton.icon(
-            onPressed: _showSavedReportsModal,
-            icon: const Icon(Icons.history, size: 20),
-            label: Text(
-              _localReportCount > 0 ? '$_localReportCount Laudos' : 'Histórico',
-              style: const TextStyle(fontWeight: FontWeight.bold),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Center(
+              child: InkWell(
+                onTap: _showSavedReportsModal,
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(color: AppColors.ice, borderRadius: BorderRadius.circular(999)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.folder_outlined, size: 16, color: AppColors.ocean),
+                    const SizedBox(width: 6),
+                    Text('$_localReportCount salvos', style: const TextStyle(color: AppColors.ocean, fontSize: 12, fontWeight: FontWeight.w800)),
+                  ]),
+                ),
+              ),
             ),
           ),
-          const SizedBox(width: 8),
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final horizontal = constraints.maxWidth >= 920;
+          return SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(horizontal ? 32 : 18, 8, horizontal ? 32 : 18, 120),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1120),
+                child: Form(
+                  key: _formKey,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    _LiveTile(onTap: _isLoading ? null : _openLiveMonitor),
+                    const SizedBox(height: 16),
+                    if (horizontal)
+                      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Expanded(child: _buildIdentificationCard()),
+                        const SizedBox(width: 18),
+                        Expanded(child: _buildTestCard()),
+                      ])
+                    else ...[
+                      _buildIdentificationCard(),
+                      const SizedBox(height: 16),
+                      _buildTestCard(),
+                    ],
+                  ]),
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+          decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.line))),
           child: Center(
+            heightFactor: 1,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1060),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Barra de Modo Operacional (Simulação vs Sensor BLE Real)
-                  _buildModeSelector(),
-                  const SizedBox(height: 20),
-
-                  // Cabeçalho da Bancada Multi-Equipamento
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Bancada de Qualificação Pull-Down',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.ink,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _activeSessions.isEmpty
-                                ? 'Nenhum equipamento em teste no momento'
-                                : '${_activeSessions.length} equipamento(s) monitorado(s) em tempo real',
-                            style: const TextStyle(fontSize: 13, color: AppColors.slate),
-                          ),
-                        ],
-                      ),
-                      FilledButton.icon(
-                        onPressed: _openLinkWizard,
-                        icon: const Icon(Icons.add_link),
-                        label: const Text('Vincular Equipamento'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Lista de Sessões Ativas ou Estado Vazio
-                  if (_activeSessions.isEmpty)
-                    _buildEmptyBench()
-                  else
-                    _buildActiveSessionsList(),
-                ],
+              constraints: const BoxConstraints(maxWidth: 1120),
+              child: ElevatedButton.icon(
+                onPressed: _isLoading ? null : _runAudit,
+                icon: _isLoading
+                    ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
+                    : const Icon(Icons.bluetooth_searching),
+                label: Text(
+                  _isLoading ? _statusText : 'Conectar ao Sensor e Avaliar',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
               ),
             ),
           ),
         ),
       ),
-      floatingActionButton: _activeSessions.isNotEmpty
-          ? FloatingActionButton.extended(
-              onPressed: _openLinkWizard,
-              icon: const Icon(Icons.add),
-              label: const Text('Adicionar à Bancada'),
-              backgroundColor: AppColors.ocean,
-            )
-          : null,
     );
   }
 
-  Widget _buildModeSelector() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.line),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            _useRealBle ? Icons.bluetooth_connected : Icons.science_outlined,
-            color: _useRealBle ? AppColors.ocean : const Color(0xFF6366F1),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _useRealBle ? 'Modo Hardware Físico (BLE AoFrio)' : 'Modo Simulação de Bancada',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppColors.ink),
-                ),
-                Text(
-                  _useRealBle
-                      ? 'Conecta diretamente aos sensores Wellington AoFrio MON1-001.'
-                      : 'Gera curvas térmicas simultâneas para validação sem hardware.',
-                  style: const TextStyle(fontSize: 11, color: AppColors.slate),
-                ),
-              ],
+  Widget _buildIdentificationCard() => _SectionCard(
+        title: 'Identificação do equipamento',
+        subtitle: 'Dados que serão impressos no laudo oficial.',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          TextFormField(
+            controller: _serialController,
+            validator: _required,
+            textInputAction: TextInputAction.next,
+            decoration: InputDecoration(
+              labelText: 'Patrimônio ou número de série',
+              prefixIcon: const Icon(Icons.qr_code_2),
+              suffixIcon: IconButton(onPressed: _isLoading ? null : _scanAsset, tooltip: 'Ler QR Code', icon: const Icon(Icons.document_scanner_outlined)),
             ),
           ),
-          Switch(
-            value: _useRealBle,
-            onChanged: _toggleBleMode,
-            activeColor: AppColors.ocean,
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _modelController,
+            validator: _required,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: 'Modelo do refrigerador', prefixIcon: Icon(Icons.kitchen_outlined)),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyBench() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.line),
-      ),
-      child: Center(
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.ice,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.kitchen_outlined, size: 54, color: AppColors.ocean),
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'Nenhum Equipamento Vinculado',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.ink),
-            ),
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
-              child: Text(
-                'O app não se conecta automaticamente. Para iniciar a qualificação, toque no botão abaixo para escolher o sensor, identificar a geladeira e registrar o técnico responsável.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: AppColors.slate, height: 1.4),
-              ),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _openLinkWizard,
-              icon: const Icon(Icons.add_link),
-              label: const Text('Vincular Primeiro Equipamento'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                textStyle: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActiveSessionsList() {
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: _activeSessions.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 16),
-      itemBuilder: (context, index) {
-        final session = _activeSessions[index];
-        final tempColor = _tempColor(session.currentTemperature, session.profile);
-        final target = session.profile.targetTemperature;
-
-        return Card(
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Topo do Card: Patrimônio, Modelo e Cronômetro
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: tempColor.withValues(alpha: 0.12),
-                      radius: 22,
-                      child: Icon(Icons.kitchen, color: tempColor, size: 24),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                session.equipmentSerial,
-                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.ink),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: AppColors.ice,
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  session.profile.name,
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.ocean),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            session.equipmentModel,
-                            style: const TextStyle(color: AppColors.slate, fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Cronômetro decorrido
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.timer_outlined, size: 14, color: AppColors.slate),
-                          const SizedBox(width: 4),
-                          Text(
-                            session.elapsedFormatted,
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                              color: AppColors.ink,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Meio do Card: Mostrador de Temperatura e Metadados
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: tempColor.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: tempColor.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Temperatura Atual
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'TEMPERATURA ATUAL',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.slate, letterSpacing: 0.8),
-                          ),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.baseline,
-                            textBaseline: TextBaseline.alphabetic,
-                            children: [
-                              Text(
-                                session.currentTemperature.toStringAsFixed(1),
-                                style: TextStyle(
-                                  fontSize: 44,
-                                  fontWeight: FontWeight.w900,
-                                  color: tempColor,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '°C',
-                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: tempColor),
-                              ),
-                            ],
-                          ),
-                          Text(
-                            session.currentTemperature <= target
-                                ? 'Estabilizando na meta'
-                                : 'Em pull-down (Alvo: $target°C)',
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: tempColor),
-                          ),
-                        ],
-                      ),
-
-                      // Detalhes do Sensor e Técnico
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          _DetailChip(icon: Icons.sensors, text: session.sensorDevice.name),
-                          const SizedBox(height: 6),
-                          _DetailChip(icon: Icons.badge_outlined, text: session.technicianName),
-                          const SizedBox(height: 6),
-                          _DetailChip(
-                            icon: session.doorOpen ? Icons.meeting_room : Icons.door_front_door,
-                            text: session.doorOpen ? 'Porta Aberta' : 'Porta Fechada',
-                            color: session.doorOpen ? AppColors.warning : AppColors.success,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Rodapé do Card: Ações (Monitorar ao vivo, Finalizar, Desvincular)
-                Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => _unlinkSession(session),
-                      style: TextButton.styleFrom(foregroundColor: AppColors.slate),
-                      child: const Text('Desvincular'),
-                    ),
-                    const Spacer(),
-                    OutlinedButton.icon(
-                      onPressed: () => _openSessionDetail(session),
-                      icon: const Icon(Icons.show_chart, size: 18),
-                      label: const Text('Ver Gráfico'),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton.icon(
-                      onPressed: () => _finishSession(session),
-                      icon: const Icon(Icons.assignment_turned_in, size: 18),
-                      label: const Text('Finalizar & Laudo'),
-                      style: FilledButton.styleFrom(backgroundColor: AppColors.ocean),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _responsibleController,
+            validator: _required,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(labelText: 'Responsável pelo teste', prefixIcon: Icon(Icons.badge_outlined)),
           ),
-        );
-      },
-    );
-  }
+        ]),
+      );
+
+  Widget _buildTestCard() => _SectionCard(
+        title: 'Configuração do ensaio',
+        subtitle: 'Perfil térmico e duração da captura ao vivo.',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          DropdownButtonFormField<TestProfile>(
+            initialValue: _selectedProfile,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Perfil térmico', prefixIcon: Icon(Icons.thermostat_outlined)),
+            items: TestProfile.defaultProfiles
+                .map((profile) => DropdownMenuItem(
+                      value: profile,
+                      child: Text('${profile.name.split(' (').first} • ${profile.targetTemperature}°C', overflow: TextOverflow.ellipsis),
+                    ))
+                .toList(),
+            onChanged: _isLoading ? null : (value) => setState(() => _selectedProfile = value ?? _selectedProfile),
+          ),
+          const SizedBox(height: 14),
+          DropdownButtonFormField<Duration>(
+            initialValue: _captureWindow,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Duração do ensaio ao vivo',
+              helperText: 'Pode minimizar o app durante o ensaio.',
+              prefixIcon: Icon(Icons.timer_outlined),
+            ),
+            items: _captureWindows.entries
+                .map((e) => DropdownMenuItem(value: e.value, child: Text(e.key, overflow: TextOverflow.ellipsis)))
+                .toList(),
+            onChanged: _isLoading ? null : (value) => setState(() => _captureWindow = value ?? _captureWindow),
+          ),
+        ]),
+      );
 }
 
-class _DetailChip extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final Color? color;
-
-  const _DetailChip({required this.icon, required this.text, this.color});
-
+class _LiveTile extends StatelessWidget {
+  final VoidCallback? onTap;
+  const _LiveTile({required this.onTap});
   @override
-  Widget build(BuildContext context) {
-    final c = color ?? AppColors.slate;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: c),
-        const SizedBox(width: 4),
-        Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: c)),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Material(
+        color: AppColors.ocean,
+        borderRadius: BorderRadius.circular(22),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(22),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(14)),
+                child: const Icon(Icons.thermostat, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Temperatura em tempo real', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+                  SizedBox(height: 3),
+                  Text('Vê todos os sensores próximos ao vivo, sem conexão.', style: TextStyle(color: Color(0xFFD6EEF0), fontSize: 12)),
+                ]),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.white),
+            ]),
+          ),
+        ),
+      );
+}
+
+class _BrandMark extends StatelessWidget {
+  const _BrandMark();
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(color: AppColors.ocean, borderRadius: BorderRadius.circular(13)),
+        child: const Icon(Icons.ac_unit_rounded, color: Colors.white, size: 21),
+      );
+}
+
+class _SectionCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final Widget child;
+  const _SectionCard({required this.title, required this.subtitle, required this.child});
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: AppColors.line),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(subtitle),
+            const SizedBox(height: 18),
+            child,
+          ]),
+        ),
+      );
 }

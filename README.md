@@ -36,9 +36,9 @@ Permitir que técnicos e inspetores de qualidade testem refrigeradores **sem dep
                                │ (Sync via REST API / JSON)
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. BACKEND API (Node.js / Express / SQLite)                 │
-│    - Recebe laudos e séries temporais do App Mobile.        │
-│    - Armazena histórico centralizado de todos os ensaios.   │
+│ 3. CLOUD API (Cloudflare Workers + D1)                      │
+│    - Recebe laudos com autenticação via HTTPS.              │
+│    - Armazena histórico centralizado no banco D1.           │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
@@ -73,7 +73,16 @@ Permitir que técnicos e inspetores de qualidade testem refrigeradores **sem dep
 ### 1. Testar o Painel Web de Relatórios:
 Abra o arquivo [`web-dashboard/index.html`](web-dashboard/index.html) diretamente no seu navegador Google Chrome ou Edge. Ele já vem com dados simulados interativos, filtros e gerador de PDF.
 
-### 2. Testar o Backend API:
+### 2. Portal Cloudflare em produção:
+
+O portal está publicado em:
+
+`https://aofrio-refrigeration.codigo-divino-estudio.workers.dev`
+
+O banco e a API ficam em [`cloudflare-worker/`](cloudflare-worker/). O backend
+Node.js permanece disponível apenas para desenvolvimento local.
+
+### 3. Testar o Backend API local (opcional):
 ```bash
 cd backend-api
 npm install
@@ -81,10 +90,10 @@ npm start
 ```
 A API iniciará em `http://localhost:3000`.
 
-### 3. Rodar o App Mobile (Flutter):
+### 4. Rodar o App Mobile (Flutter):
 ```bash
 cd mobile-app
 flutter pub get
-flutter run
+flutter run --dart-define=AOFRIO_API_TOKEN=SUA_CHAVE
 ```
 No app móvel, utilize o botão **"Alternar Modo Simulação"** para testar os 3 cenários de teste enquanto aguarda o hardware físico AoFrio chegar.

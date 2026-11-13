@@ -507,8 +507,8 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.ink),
             ),
             const SizedBox(height: 8),
-            const ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 440),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
               child: Text(
                 'O app não se conecta automaticamente. Para iniciar a qualificação, toque no botão abaixo para escolher o sensor, identificar a geladeira e registrar o técnico responsável.',
                 textAlign: TextAlign.center,

@@ -1,4 +1,4 @@
-name: Build AoFrio Tester (iOS IPA + Android APK)
+name: Build ISO Test (iOS IPA + Android APK)
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
           zip -qr AoFrioTester.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: AoFrioTester.ipa
+          name: IsoTest.ipa
           path: mobile-app/build/ios/ipa/AoFrioTester.ipa
           if-no-files-found: error
 
@@ -60,6 +60,6 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
+          name: IsoTest.apk
           path: mobile-app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error

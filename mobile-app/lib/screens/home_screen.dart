@@ -349,7 +349,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ColdTrack Pro • Bancada ISO'),
+        title: const Text('ISO Test • Bancada'),
         actions: [
           TextButton.icon(
             onPressed: _showSavedReportsModal,

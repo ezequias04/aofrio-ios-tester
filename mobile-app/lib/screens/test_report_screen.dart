@@ -106,7 +106,7 @@ PARECER TÉCNICO:
 ${r.verdictReason}
 
 ID de Rastreabilidade: ${r.testId}
-Sistema AoFrio Refrigeration Testing System
+Sistema ISO Test • Qualificação Térmica ISO 23953
 ''';
 
     Clipboard.setData(ClipboardData(text: text));

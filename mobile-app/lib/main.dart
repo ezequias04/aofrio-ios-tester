@@ -10,18 +10,18 @@ void main() {
   // O usuário pode alternar em tempo real no app para WellingtonBleService
   final bleService = MockBleService();
 
-  runApp(AoFrioTestingApp(bleService: bleService));
+  runApp(IsoTestingApp(bleService: bleService));
 }
 
-class AoFrioTestingApp extends StatelessWidget {
+class IsoTestingApp extends StatelessWidget {
   final MockBleService bleService;
 
-  const AoFrioTestingApp({super.key, required this.bleService});
+  const IsoTestingApp({super.key, required this.bleService});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ColdTrack Pro',
+      title: 'ISO Test',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       themeMode: ThemeMode.light,

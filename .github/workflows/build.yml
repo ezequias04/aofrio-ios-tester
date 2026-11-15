@@ -20,7 +20,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build ios --release --no-codesign
+      - run: flutter build ios --release --no-codesign --dart-define=AOFRIO_API_TOKEN=${{ secrets.AOFRIO_API_TOKEN }}
       - name: Empacotar Payload/Runner.app em AoFrioTester.ipa
         run: |
           mkdir -p build/ios/ipa/Payload
@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if ! flutter build apk --release 2>&1 | tee build.log; then
+          if ! flutter build apk --release --dart-define=AOFRIO_API_TOKEN=${{ secrets.AOFRIO_API_TOKEN }} 2>&1 | tee build.log; then
             # Publica o motivo como anotação (legível sem acesso de admin ao log)
             grep -A12 -E "What went wrong|Error:|error:" build.log | head -60 \
               | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error::$l"; done

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../engine/pull_down_analyzer.dart';
 import '../models/test_profile.dart';
@@ -189,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
+      await WakelockPlus.enable(); // tela não bloqueia durante a captura
       await _ensureBluetoothPermissions();
       // Curva do laudo vem SÓ do decoder confirmado do anúncio BLE (centésimos
       // de °C), sem conexão e sem dado inventado. iOS: app em primeiro plano.
@@ -213,6 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error) {
       _showError(error.toString().replaceFirst('Exception: ', ''));
     } finally {
+      await WakelockPlus.disable();
       await _ble.stopScan();
       if (mounted) {
         setState(() {

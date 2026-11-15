@@ -315,39 +315,58 @@ class WellingtonBleService {
     final readings = <SensorReading>[];
     String? targetId;
     double? lastTemp;
-    await FlutterBluePlus.startScan(
-      continuousUpdates: true,
-      androidScanMode: AndroidScanMode.lowLatency,
-      androidUsesFineLocation: false,
-    );
+
+    void handle(List<ScanResult> results) {
+      ScanResult? best;
+      for (final r in results) {
+        final w = r.advertisementData.manufacturerData[0x578];
+        if (w == null || !_isWellingtonMonitor(r)) continue;
+        if (targetId != null && r.device.remoteId.str != targetId) continue;
+        if (best == null || r.rssi > best.rssi) best = r;
+      }
+      if (best == null) return;
+      targetId ??= best.device.remoteId.str;
+      final t = decodeAdvTemp(best.advertisementData.manufacturerData[0x578]!);
+      if (t == null) return;
+      final now = DateTime.now();
+      final changed = lastTemp == null || (t - lastTemp).abs() >= 0.1;
+      final stale = readings.isEmpty ||
+          now.difference(readings.last.timestamp).inSeconds >= 15;
+      if (changed || stale) {
+        readings.add(SensorReading(timestamp: now, temperature: t));
+        lastTemp = t;
+      }
+    }
+
+    // Reinicia o scan se ele morreu (iOS/Android suspendem o BLE quando o app
+    // vai pra segundo plano ou a tela bloqueia). Sem isto, voltar ao app deixava
+    // o scan parado e o laudo terminava com poucas leituras ("teste falhou").
+    Future<void> ensureScan() async {
+      if (FlutterBluePlus.isScanningNow) return;
+      try {
+        await FlutterBluePlus.startScan(
+          continuousUpdates: true,
+          androidScanMode: AndroidScanMode.lowLatency,
+          androidUsesFineLocation: false,
+        );
+      } catch (_) {}
+    }
+
+    final sub = FlutterBluePlus.scanResults.listen(handle);
     final deadline = DateTime.now().add(window);
     try {
-      await for (final results in FlutterBluePlus.scanResults) {
-        ScanResult? best;
-        for (final r in results) {
-          final w = r.advertisementData.manufacturerData[0x578];
-          if (w == null || !_isWellingtonMonitor(r)) continue;
-          if (targetId != null && r.device.remoteId.str != targetId) continue;
-          if (best == null || r.rssi > best.rssi) best = r;
-        }
-        if (best != null) {
-          targetId ??= best.device.remoteId.str;
-          final t = decodeAdvTemp(best.advertisementData.manufacturerData[0x578]!);
-          if (t != null) {
-            final now = DateTime.now();
-            final changed = lastTemp == null || (t - lastTemp).abs() >= 0.1;
-            final stale = readings.isEmpty ||
-                now.difference(readings.last.timestamp).inSeconds >= 15;
-            if (changed || stale) {
-              readings.add(SensorReading(timestamp: now, temperature: t));
-              lastTemp = t;
-            }
-          }
-        }
-        if (DateTime.now().isAfter(deadline)) break;
+      await ensureScan();
+      // ponytail: poll de 3s re-arma o scan após retomar do background; tempo é
+      // relógio de parede, então a janela total continua correta mesmo suspenso.
+      while (DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(seconds: 3));
+        await ensureScan();
       }
     } finally {
-      await FlutterBluePlus.stopScan();
+      await sub.cancel();
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {}
     }
     return readings;
   }

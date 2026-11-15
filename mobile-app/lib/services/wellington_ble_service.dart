@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/sensor_reading.dart';
+import 'scs_event_log_reader.dart';
+import 'scs_stats_decoder.dart';
 
 /// Driver Bluetooth real para o sensor **Wellington Monitor (MON1-001)**.
 ///
@@ -128,6 +130,7 @@ class WellingtonBleService {
   BluetoothCharacteristic? _reqDataChar;
   BluetoothCharacteristic? _assetTrackTxChar;
   BluetoothCharacteristic? _bulkTxChar;
+  BluetoothCharacteristic? _rxChar;
 
   final _statusController = StreamController<Uint8List>.broadcast();
   final _eventBlockController = StreamController<Uint8List>.broadcast();
@@ -329,7 +332,8 @@ class WellingtonBleService {
       final t = decodeAdvTemp(best.advertisementData.manufacturerData[0x578]!);
       if (t == null) return;
       final now = DateTime.now();
-      final changed = lastTemp == null || (t - lastTemp).abs() >= 0.1;
+      final last = lastTemp;
+      final changed = last == null || (t - last).abs() >= 0.1;
       final stale = readings.isEmpty ||
           now.difference(readings.last.timestamp).inSeconds >= 15;
       if (changed || stale) {
@@ -466,6 +470,11 @@ class WellingtonBleService {
     _bulkTxChar = assetTrack.characteristics.firstWhere(
       (c) => c.uuid.str128.toLowerCase() == assetTrackBulkTxCharacteristicUuid,
     );
+    // Opcional: sem ele só o laudo ao vivo funciona, o download do log não.
+    _rxChar = assetTrack.characteristics.cast<BluetoothCharacteristic?>().firstWhere(
+          (c) => c!.uuid.str128.toLowerCase() == assetTrackRxCharacteristicUuid,
+          orElse: () => null,
+        );
 
     rawLog.clear();
     _log('CONECTADO $deviceId; serviços: ${services.map((s) => s.uuid.str128.substring(0, 8)).join(',')}');
@@ -518,6 +527,52 @@ class WellingtonBleService {
 
     _isConnected = true;
     return true;
+  }
+
+  /// Relógio do sensor (cmd 1). Resposta: [1, timestamp u32 LE] pelo canal TX.
+  /// Com ele: offset = (Unix agora) − timestamp do sensor.
+  Future<int> requestSensorTimestamp() async {
+    final req = _reqDataChar;
+    if (req == null) throw Exception('Não conectado.');
+    final completer = Completer<int>();
+    late StreamSubscription<Uint8List> sub;
+    sub = rawStatusNotifications.listen((d) {
+      if (d.length >= 5 && d[0] == scsRequestTimestamp && !completer.isCompleted) {
+        completer.complete(ByteData.sublistView(d).getUint32(1, Endian.little));
+      }
+    });
+    try {
+      await req.write([scsRequestTimestamp], withoutResponse: false);
+      return await completer.future.timeout(const Duration(seconds: 3));
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  /// Baixa o log de páginas do sensor (protocolo do app oficial). Não usado pelo
+  /// laudo ainda: falta validar com hardware. [protocolVersion] e [fastRead]
+  /// vêm do dispositivo (fastRead: controllerCodeRevision >= 4 no Monitor).
+  Future<List<ScsEventBlock>> downloadEventLog({
+    required int reqTimeSecs,
+    required int protocolVersion,
+    required bool fastRead,
+  }) async {
+    final req = _reqDataChar;
+    final rx = _rxChar;
+    if (req == null || rx == null) throw Exception('Não conectado.');
+    final reader = ScsEventLogReader(
+      writeReqData: (b) => req.write(b.toList(), withoutResponse: false),
+      writeRx: (b) => rx.write(b.toList(), withoutResponse: false),
+      tx: rawStatusNotifications,
+      bulk: rawEventBlocks,
+      protocolVersion: protocolVersion,
+      fastRead: fastRead,
+    );
+    try {
+      return await reader.readEventLog(reqTimeSecs: reqTimeSecs);
+    } finally {
+      await reader.dispose();
+    }
   }
 
   /// Envia o comando `SCS_REQUEST_STATUS` (código 2). Formato confirmado
@@ -744,6 +799,7 @@ class WellingtonBleService {
     _reqDataChar = null;
     _assetTrackTxChar = null;
     _bulkTxChar = null;
+    _rxChar = null;
     _isConnected = false;
   }
 }

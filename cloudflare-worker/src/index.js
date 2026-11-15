@@ -300,11 +300,18 @@ function freshIds(list){ // ids novos desde o último render, pra animar
   return list.filter(function(t){return !prev[t.id]}).map(function(t){return t.id});
 }
 
+function gate(msg){
+  el('list').innerHTML='<div class="empty"><div style="margin-bottom:12px">'+(msg||'Informe a chave de acesso do Portal.')+'</div>'
+    +'<input id="keyIn" type="password" placeholder="Chave de acesso" style="padding:10px 12px;border:1px solid var(--line);border-radius:10px;min-width:240px;font:inherit"> '
+    +'<button onclick="applyKey()" style="padding:10px 16px;border:0;border-radius:10px;background:var(--ocean);color:#fff;font:inherit;cursor:pointer">Entrar</button></div>';
+  var k=el('keyIn');if(k){k.focus();k.addEventListener('keydown',function(e){if(e.key==='Enter')applyKey()})}
+}
+function applyKey(){var i=el('keyIn');var v=(i&&i.value||'').trim();if(!v)return;token=v;localStorage.setItem('aofrio_api_token',v);firstPaint=true;load()}
 async function load(){
-  if(!token){token=prompt('Informe a chave de acesso do Portal AoFrio:')||'';if(token)localStorage.setItem('aofrio_api_token',token);else{return}}
+  if(!token){gate();return}
   try{
     var r=await Promise.all([authFetch('/api/tests'),authFetch('/api/stats')]);
-    if(r[0].status===401||r[1].status===401){localStorage.removeItem('aofrio_api_token');token='';el('list').innerHTML='<div class="empty">Chave inválida. Recarregue a página e informe a chave de novo.</div>';return}
+    if(r[0].status===401||r[1].status===401){localStorage.removeItem('aofrio_api_token');token='';gate('Chave inválida. Informe a chave de acesso de novo.');return}
     var d=await Promise.all([r[0].json(),r[1].json()]);
     var incoming=d[0],s=d[1];
     el('total').textContent=s.total;el('tileTotal').textContent=s.total;

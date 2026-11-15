@@ -575,6 +575,83 @@ class WellingtonBleService {
     }
   }
 
+  /// Diagnóstico do log de páginas, para validar o protocolo com hardware real.
+  /// Procura o Monitor, conecta, sincroniza o relógio, baixa o log, decodifica
+  /// e desconecta. Devolve linhas de texto para mostrar ao técnico.
+  /// protocolVersion 70 é suposição: o bloco traz o valor real (ver última linha).
+  Future<List<String>> runEventLogDiagnostic() async {
+    const assumedProtocolVersion = 70;
+    final lines = <String>[];
+    final id = await _findMonitorId();
+    if (id == null) {
+      return ['Nenhum Monitor encontrado em 12 s. Aproxime o sensor e tente de novo.'];
+    }
+    lines.add('Monitor: $id');
+    await connect(id);
+    try {
+      final sensorTs = await requestSensorTimestamp();
+      final offset = DateTime.now().millisecondsSinceEpoch ~/ 1000 - sensorTs;
+      lines.add('Relógio do sensor: $sensorTs s (offset ${offset}s)');
+
+      var fast = true;
+      List<ScsEventBlock> blocks;
+      try {
+        blocks = await downloadEventLog(
+            reqTimeSecs: 0, protocolVersion: assumedProtocolVersion, fastRead: true);
+      } catch (e) {
+        lines.add('Modo rápido falhou ($e). Tentando modo normal.');
+        fast = false;
+        blocks = await downloadEventLog(
+            reqTimeSecs: 0, protocolVersion: assumedProtocolVersion, fastRead: false);
+      }
+      lines.add('Modo: ${fast ? 'rápido' : 'normal'}. Blocos válidos: ${blocks.length}');
+
+      final readings = decodeStatsV2(
+        blocks: blocks,
+        sensorToUnixOffsetSecs: offset,
+        protocolVersion: assumedProtocolVersion,
+      );
+      lines.add('Leituras de temperatura: ${readings.length}');
+      if (readings.isNotEmpty) {
+        final a = readings.first;
+        final b = readings.last;
+        lines.add('Primeira: ${a.temperature.toStringAsFixed(1)} °C em ${a.timestamp.toLocal()}');
+        lines.add('Última: ${b.temperature.toStringAsFixed(1)} °C em ${b.timestamp.toLocal()}');
+      }
+      if (blocks.isNotEmpty) {
+        lines.add('protocolVersion real no bloco: ${blocks.first.protocolVersion}');
+        lines.add('Status do 1º bloco: 0x${blocks.first.status.toRadixString(16)}');
+      }
+    } finally {
+      await disconnect();
+    }
+    return lines;
+  }
+
+  /// Procura um Monitor no scan (12 s) e devolve o id do dispositivo, ou null.
+  Future<String?> _findMonitorId() async {
+    final found = Completer<String?>();
+    final sub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        if (r.advertisementData.manufacturerData[0x578] != null &&
+            _isWellingtonMonitor(r) &&
+            !found.isCompleted) {
+          found.complete(r.device.remoteId.str);
+        }
+      }
+    });
+    try {
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 12),
+        androidUsesFineLocation: false,
+      );
+      return await found.future.timeout(const Duration(seconds: 12), onTimeout: () => null);
+    } finally {
+      await sub.cancel();
+      await FlutterBluePlus.stopScan();
+    }
+  }
+
   /// Envia o comando `SCS_REQUEST_STATUS` (código 2). Formato confirmado
   /// por engenharia reversa do app oficial (método `startReadStatus`):
   /// um `ByteArray` de 1 byte, só com o código do comando.

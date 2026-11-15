@@ -181,6 +181,42 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Diagnóstico do protocolo de log (não gera laudo). Mostra o resultado linha a linha.
+  Future<void> _runDiagnostic() async {
+    setState(() {
+      _isLoading = true;
+      _statusText = 'Diagnóstico do log do sensor…';
+    });
+    late List<String> lines;
+    try {
+      await _ensureBluetoothPermissions();
+      lines = await _ble.runEventLogDiagnostic();
+    } catch (error) {
+      lines = ['Falha: ${error.toString().replaceFirst('Exception: ', '')}'];
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusText = 'Pronto para iniciar';
+        });
+      }
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Diagnóstico do log'),
+        content: SingleChildScrollView(child: SelectableText(lines.join('\n'))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _runAudit() async {
     FocusScope.of(context).unfocus();
     if (!(_formKey.currentState?.validate() ?? false)) return;
@@ -263,6 +299,11 @@ class _HomeScreenState extends State<HomeScreen> {
           _BrandMark(), SizedBox(width: 11), Text('ISO Test'),
         ]),
         actions: [
+          IconButton(
+            tooltip: 'Diagnóstico do log do sensor',
+            onPressed: _isLoading ? null : _runDiagnostic,
+            icon: const Icon(Icons.bug_report_outlined),
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Center(

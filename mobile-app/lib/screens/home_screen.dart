@@ -257,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFFF6F9FB),
         surfaceTintColor: Colors.transparent,
         title: const Row(mainAxisSize: MainAxisSize.min, children: [
-          _BrandMark(), SizedBox(width: 11), Text('AoFrio Test'),
+          _BrandMark(), SizedBox(width: 11), Text('ISO Test'),
         ]),
         actions: [
           Padding(

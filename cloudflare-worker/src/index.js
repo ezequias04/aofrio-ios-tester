@@ -138,7 +138,7 @@ async function getStats(env) {
 // cifrão-chave aqui dentro: o template é String.raw e qualquer um deles quebraria.
 const dashboard = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#f6f9fb"><title>AoFrio Test • Portal</title>
+<meta name="theme-color" content="#f6f9fb"><title>ISO Test • Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
@@ -232,7 +232,7 @@ dialog::backdrop{background:rgba(16,42,67,.5);backdrop-filter:blur(4px)}
 @media(max-width:460px){.shell{padding:0 14px}.stats{grid-template-columns:1fr 1fr}.rmeta .d{display:none}.filter{padding:11px 11px}}
 </style></head><body>
 <header class="top" id="top"><div class="shell nav">
-  <div class="brand"><div class="mark">❄</div><div>AoFrio Test</div></div>
+  <div class="brand"><div class="mark">❄</div><div>ISO Test</div></div>
   <div class="live"><span class="dot"></span><span id="liveLabel">ao vivo</span></div>
 </div></header>
 <main class="shell">

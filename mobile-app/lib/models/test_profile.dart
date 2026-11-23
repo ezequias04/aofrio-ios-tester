@@ -1,19 +1,25 @@
-/// Define os parâmetros exigidos para o teste de uma categoria de refrigerador comercial
+/// Define os parâmetros normativos para qualificação e diagnóstico de um refrigerador comercial.
 class TestProfile {
   final String id;
   final String name;
-  final String standardName; // Referência da norma ou especificação
-  final double targetTemperature; // Set-point alvo de pull-down (ex: 3.0°C ou -2.0°C)
-  final double differential;      // Histerese de ciclagem permitida (ex: 1.0°C ou 2.0°C)
-  final int? manualMaxAllowedMinutes; // Tempo máximo de ensaio permitido
-  final double minInitialDrop15;  // Mínimo de queda exigido nos primeiros 15 min
-  final double minStartingAmbientTemp; // Temperatura ambiente mínima para $T_0$ auditado
-  final double? safetyMinTemperature; // Alerta de congelamento indevido
+  final String shortLabel;
+  final String categoryTag;
+  final String standardName;
+  final String description;
+  final double targetTemperature;
+  final double differential;
+  final int? manualMaxAllowedMinutes;
+  final double minInitialDrop15;
+  final double minStartingAmbientTemp;
+  final double? safetyMinTemperature;
 
   const TestProfile({
     required this.id,
     required this.name,
+    this.shortLabel = '',
+    this.categoryTag = 'Padrão',
     required this.standardName,
+    this.description = '',
     required this.targetTemperature,
     this.differential = 1.5,
     this.manualMaxAllowedMinutes,
@@ -25,7 +31,10 @@ class TestProfile {
   double get minTemperature => targetTemperature - differential;
   double get maxTemperature => targetTemperature + differential;
 
-  /// Calcula o tempo máximo tolerado para o ensaio pull-down
+  String get displayShort =>
+      shortLabel.isNotEmpty ? shortLabel : name.split(' (').first;
+
+  /// Calcula o tempo máximo tolerado para o ensaio pull-down.
   int calculateMaxAllowedMinutes(double ambientTemp) {
     if (manualMaxAllowedMinutes != null && manualMaxAllowedMinutes! > 0) {
       return manualMaxAllowedMinutes!;
@@ -36,36 +45,56 @@ class TestProfile {
     return minutes.clamp(30, 360);
   }
 
+  static TestProfile byId(String? id) {
+    if (id == null || id.isEmpty) return defaultProfiles.first;
+    return defaultProfiles.firstWhere(
+      (p) => p.id == id,
+      orElse: () => defaultProfiles.first,
+    );
+  }
+
   static const List<TestProfile> defaultProfiles = [
     TestProfile(
       id: 'coca_cola_positive',
       name: 'Positiva Bebidas (Coca-Cola / KORE)',
+      shortLabel: 'Coca-Cola KORE',
+      categoryTag: 'Positiva +3°C',
       standardName: 'Padrão Coca-Cola Bottler Spec • KORE Engineering',
+      description:
+          'Expositores verticais e visicoolers de refrigerantes/água. Faixa ideal de +2°C a +4°C em até 180 min; proibido atingir abaixo de 0°C.',
       targetTemperature: 3.0,
-      differential: 1.0, // Faixa 2.0°C a 4.0°C
-      manualMaxAllowedMinutes: 180, // Máx 3 horas
+      differential: 1.0,
+      manualMaxAllowedMinutes: 180,
       minInitialDrop15: 1.5,
       minStartingAmbientTemp: 24.0,
-      safetyMinTemperature: 0.0, // Proibido congelar refrigerante
+      safetyMinTemperature: 0.0,
     ),
     TestProfile(
       id: 'beer_cooler_subzero',
       name: 'Cervejeira Sub-Zero (Ambev / Heineken)',
+      shortLabel: 'Cervejeira Sub-Zero',
+      categoryTag: 'Sub-Zero -2°C',
       standardName: 'Padrão Comercial de Cervejeiras • Sub-Zero',
+      description:
+          'Cervejeiras comerciais de alta demanda. Meta -2°C (faixa -4°C a 0°C) em até 240 min; alerta crítico se cair abaixo de -5°C (risco de congelar garrafa).',
       targetTemperature: -2.0,
-      differential: 2.0, // Faixa -4.0°C a 0.0°C
-      manualMaxAllowedMinutes: 240, // Máx 4 horas
+      differential: 2.0,
+      manualMaxAllowedMinutes: 240,
       minInitialDrop15: 1.5,
       minStartingAmbientTemp: 22.0,
-      safetyMinTemperature: -5.0, // Alerta de congelamento de garrafa
+      safetyMinTemperature: -5.0,
     ),
     TestProfile(
       id: 'freezer_frozen_l1',
       name: 'Freezer Negativo / Sorvetes (ISO L1/L2)',
+      shortLabel: 'Freezer ISO L1/L2',
+      categoryTag: 'Congelados -18°C',
       standardName: 'ISO 23953 Classe L1/L2 • Alimentos Congelados',
+      description:
+          'Conservadores de gelo, sorvetes e congelados. Meta -18°C em até 360 min com controle de degeneração térmica.',
       targetTemperature: -18.0,
-      differential: 3.5, // Faixa -21.5°C a -14.5°C
-      manualMaxAllowedMinutes: 360, // Máx 6 horas
+      differential: 3.5,
+      manualMaxAllowedMinutes: 360,
       minInitialDrop15: 1.0,
       minStartingAmbientTemp: 20.0,
       safetyMinTemperature: -28.0,
@@ -73,10 +102,14 @@ class TestProfile {
     TestProfile(
       id: 'iso_23953_m1',
       name: 'ABNT NBR ISO 23953 (Classe M1)',
+      shortLabel: 'ABNT ISO M1',
+      categoryTag: 'Positiva +3,5°C',
       standardName: 'Norma Brasileira ABNT NBR ISO 23953-2 Classe M1',
+      description:
+          'Balcões e expositores comerciais gerais pela norma brasileira. Meta +3,5°C (faixa +2°C a +5°C) em até 210 min.',
       targetTemperature: 3.5,
-      differential: 1.5, // Faixa 2.0°C a 5.0°C
-      manualMaxAllowedMinutes: 210, // 3,5 horas
+      differential: 1.5,
+      manualMaxAllowedMinutes: 210,
       minInitialDrop15: 1.2,
       minStartingAmbientTemp: 24.0,
       safetyMinTemperature: -0.5,

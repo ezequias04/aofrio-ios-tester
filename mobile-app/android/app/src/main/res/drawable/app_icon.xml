@@ -4,13 +4,59 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Obsidian background -->
     <path
-        android:fillColor="#EAF6FC"
-        android:pathData="M54,4A50,50 0,1 0,54 104A50,50 0,1 0,54 4" />
+        android:fillColor="#0F172A"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Subtle inner Carbon disc -->
     <path
-        android:fillColor="#087CA7"
-        android:pathData="M49,23h10v62h-10zM23,49h62v10h-62zM29,31l7,-7 43,43 -7,7zM72,24l7,7 -43,43 -7,-7z" />
+        android:fillColor="#1E293B"
+        android:pathData="M54,10A44,44 0,1 0,54 98A44,44 0,1 0,54 10" />
+    <!-- Outer broken Indigo calibration ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#6366F1"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round"
+        android:pathData="M24,69 A34,34 0 1,1 87,46" />
+    <!-- Secondary Cryo Sky arc -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round"
+        android:pathData="M82,73 A34,34 0 0,1 38,84" />
+    <!-- Target threshold line -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#10B981"
+        android:strokeAlpha="0.45"
+        android:strokeWidth="1.6"
+        android:pathData="M29,69.5h50" />
+    <!-- Pull-down thermal curve -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="5.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M31,38 C46,39 58,68 75,69.5" />
+    <!-- Warm T0 start node (Amber) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,43A11,11 0,1 0,54 65A11,11 0,1 0,54 43" />
+        android:pathData="M31,32.5A5.5,5.5 0,1 0,31 43.5A5.5,5.5 0,1 0,31 32.5" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M31,34A4,4 0,1 0,31 42A4,4 0,1 0,31 34" />
+    <!-- Target Emerald stabilized node -->
+    <path
+        android:fillColor="#10B981"
+        android:fillAlpha="0.3"
+        android:pathData="M75,60.5A9,9 0,1 0,75 78.5A9,9 0,1 0,75 60.5" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M75,63.2A6.3,6.3 0,1 0,75 75.8A6.3,6.3 0,1 0,75 63.2" />
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M75,64.8A4.7,4.7 0,1 0,75 74.2A4.7,4.7 0,1 0,75 64.8" />
 </vector>

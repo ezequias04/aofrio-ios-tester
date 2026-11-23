@@ -1,15 +1,11 @@
-import 'dart:convert';
-
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 
-import '../config/app_config.dart';
+import '../main.dart';
+import '../models/diagnostic_finding.dart';
 import '../models/test_result.dart';
-import '../services/credential_store.dart';
-import '../services/local_report_store.dart';
 import '../theme/app_theme.dart';
+import '../widgets/thermal_chart.dart';
 
 class TestReportScreen extends StatefulWidget {
   final TestResult result;
@@ -21,91 +17,114 @@ class TestReportScreen extends StatefulWidget {
 
 class _TestReportScreenState extends State<TestReportScreen> {
   bool _isSyncing = false;
-  bool _synced = false;
+  late bool _synced;
   String? _syncMessage;
 
+  @override
+  void initState() {
+    super.initState();
+    _synced = widget.result.synced;
+  }
+
   Future<void> _syncToWebPortal() async {
+    final controller = BenchScope.of(context);
     setState(() {
       _isSyncing = true;
       _syncMessage = null;
     });
 
-    bool success = false;
-
-    try {
-      final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/tests');
-      final response = await http.post(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          if (AppConfig.canSync) 'Authorization': 'Bearer ${AppConfig.apiToken}',
-        },
-        body: jsonEncode(widget.result.toJson()),
-      ).timeout(const Duration(seconds: 8));
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        success = true;
-      }
-    } catch (_) {
-      // Sem rede/portal fora do ar: cai no salvo-localmente abaixo.
-    }
-
-    if (success) {
-      await LocalReportStore.save(widget.result, synced: true);
-      if (mounted) {
-        setState(() {
-          _synced = true;
-          _syncMessage = 'Laudo sincronizado com o portal com sucesso!';
-        });
-      }
-    } else {
-      if (mounted) {
-        setState(() {
-          _syncMessage = 'Salvo localmente neste aparelho. Conecte ao Wi-Fi/PC para sincronizar com o portal.';
-        });
-      }
-    }
+    final outcome = await controller.syncSingleReport(widget.result);
 
     if (mounted) {
-      setState(() => _isSyncing = false);
+      setState(() {
+        _isSyncing = false;
+        _synced = outcome.success;
+        _syncMessage = outcome.message;
+      });
+    }
+  }
+
+  Future<void> _deleteReport() async {
+    final controller = BenchScope.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Excluir laudo deste aparelho?'),
+        content: Text(
+          'Remover o registro local de ${widget.result.serialNumber}? Esta ação não afeta laudos já enviados ao portal.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.fault),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await controller.deleteReport(widget.result.testId);
+      if (mounted) Navigator.of(context).pop();
     }
   }
 
   void _copyOfficialReport() {
     final r = widget.result;
-    final passed = r.status == TestStatus.aprovada;
-    final statusStr = passed ? 'APROVADA (CONFORME)' : 'REPROVADA (NÃO CONFORME)';
+    final String statusStr = switch (r.status) {
+      TestStatus.aprovada => 'APROVADA (CONFORME)',
+      TestStatus.reprovada => 'REPROVADA (NAO CONFORME)',
+      TestStatus.inconclusiva => 'INCONCLUSIVA (ENSAIO INTERROMPIDO)',
+    };
+
+    final causesText = r.probableCauses.isEmpty
+        ? ''
+        : '\nCAUSAS PROVAVEIS:\n${r.probableCauses.map((c) => '- $c').join('\n')}';
+
+    final actionsText = r.recommendedActions.isEmpty
+        ? ''
+        : '\nPLANO DE ACAO / OFICINA:\n${r.recommendedActions.map((a) => '- $a').join('\n')}';
+
+    final notesText = r.manualNotes.isEmpty
+        ? ''
+        : '\nANOTACOES EM CAMPO:\n${r.manualNotes.map((n) => '- $n').join('\n')}';
 
     final text = '''
-📋 LAUDO DE ENSAIO PULL-DOWN ISO 23953
-------------------------------------------
-Patrimônio/Série: ${r.serialNumber}
-Modelo: ${r.modelName}
-Técnico Responsável: ${r.technicianName}
+LAUDO TECNICO E DIAGNOSTICO - ISO TEST
+==========================================
+Equipamento: ${r.serialNumber} (${r.modelName})
+Tecnico: ${r.technicianName}
+Norma: ${r.profile.name}
+Origem dos dados: ${r.dataSource}${r.isSimulated ? ' [SIMULACAO]' : ''}
 Data/Hora: ${r.startTime.toLocal().toString().split('.').first}
 Status: $statusStr
+Diagnostico: ${r.faultCategory.label}
 
-MÉTRICAS TÉRMICAS:
-• Temperatura Inicial: ${r.initialTemp.toStringAsFixed(1)}°C
+METRICAS TERMICAS:
+• Temperatura Inicial (T0): ${r.initialTemp.toStringAsFixed(1)}°C (${r.t0Validated ? 'Validado' : 'Pre-resfriado'})
 • Temperatura Final: ${r.finalTemp.toStringAsFixed(1)}°C
 • Setpoint Alvo: ${r.profile.targetTemperature}°C
-• Duração do Pull-Down: ${r.durationMinutes} minutos
-• Tempo Limite Permitido: ${r.effectiveAllowedMinutes} minutos
-• Taxa Média de Resfriamento: ${r.coolingRate.toStringAsFixed(2)}°C/min
+• Duracao: ${r.durationMinutes} min (limite ${r.effectiveAllowedMinutes} min)
+• Taxa Media de Resfriamento: ${r.coolingRate.toStringAsFixed(2)}°C/min
 
-PARECER TÉCNICO:
+PARECER TECNICO:
 ${r.verdictReason}
+$causesText
+$actionsText
+$notesText
 
-ID de Rastreabilidade: ${r.testId}
-Sistema ISO Test • Qualificação Térmica ISO 23953
+ID Rastreabilidade: ${r.testId}
+Sistema ISO Test • Qualificacao Termica ISO 23953
 ''';
 
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Laudo técnico copiado! Pronto para enviar no WhatsApp ou Email.'),
-        backgroundColor: AppColors.success,
-        duration: Duration(seconds: 4),
+        content: Text('Laudo completo copiado para WhatsApp ou Email.'),
+        backgroundColor: AppColors.approved,
       ),
     );
   }
@@ -113,76 +132,111 @@ Sistema ISO Test • Qualificação Térmica ISO 23953
   @override
   Widget build(BuildContext context) {
     final result = widget.result;
-    final passed = result.status == TestStatus.aprovada;
-    final color = passed ? AppColors.success : AppColors.danger;
+    final isApproved = result.status == TestStatus.aprovada;
+    final isRejected = result.status == TestStatus.reprovada;
+
+    final Color color = isApproved
+        ? AppColors.approved
+        : (isRejected ? AppColors.fault : AppColors.warning);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Laudo do ensaio'),
+        title: const Text('Laudo de Diagnóstico'),
         actions: [
           IconButton(
             icon: const Icon(Icons.share_outlined),
-            tooltip: 'Copiar laudo para WhatsApp',
+            tooltip: 'Copiar laudo',
             onPressed: _copyOfficialReport,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: 'Excluir registro local',
+            onPressed: _deleteReport,
           ),
         ],
       ),
       body: SafeArea(
-        child: LayoutBuilder(builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 840;
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(18, 10, 18, 120),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1060),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  _VerdictCard(result: result, color: color, passed: passed),
-                  const SizedBox(height: 16),
-                  if (wide)
-                    Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Expanded(flex: 3, child: _ChartCard(result: result, color: color)),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 2, child: _DetailsCard(result: result)),
-                    ])
-                  else ...[
-                    _ChartCard(result: result, color: color),
-                    const SizedBox(height: 16),
-                    _DetailsCard(result: result),
-                  ],
-                  if (_syncMessage != null) ...[
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _synced ? AppColors.ice : const Color(0xFFFFF3E0),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        _syncMessage!,
-                        style: TextStyle(
-                          color: _synced ? AppColors.ocean : const Color(0xFFE65100),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 860;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 110),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1060),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _VerdictHeroCard(result: result, color: color),
+                      const SizedBox(height: 14),
+                      if (wide)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: Column(
+                                children: [
+                                  _ChartSection(result: result, color: color),
+                                  const SizedBox(height: 14),
+                                  _DiagnosisChecklistCard(result: result, color: color),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              flex: 2,
+                              child: _AuditDetailsCard(result: result),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        _DiagnosisChecklistCard(result: result, color: color),
+                        const SizedBox(height: 14),
+                        _ChartSection(result: result, color: color),
+                        const SizedBox(height: 14),
+                        _AuditDetailsCard(result: result),
+                      ],
+                      if (_syncMessage != null) ...[
+                        const SizedBox(height: 14),
+                        Container(
+                          padding: const EdgeInsets.all(13),
+                          decoration: BoxDecoration(
+                            color: _synced
+                                ? AppColors.approvedBg
+                                : AppColors.warningBg,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            _syncMessage!,
+                            style: TextStyle(
+                              color: _synced
+                                  ? AppColors.approved
+                                  : AppColors.warning,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ],
-                ]),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-            ),
-          );
-        }),
+            );
+          },
+        ),
       ),
       bottomNavigationBar: SafeArea(
         top: false,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           decoration: const BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             border: Border(top: BorderSide(color: AppColors.line)),
           ),
           child: Center(
-            heightFactor: 1, // sem isso a barra ocupa a tela inteira
+            heightFactor: 1,
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1060),
               child: Row(
@@ -201,10 +255,14 @@ Sistema ISO Test • Qualificação Térmica ISO 23953
                       icon: _isSyncing
                           ? const SizedBox.square(
                               dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
                             )
-                          : Icon(_synced ? Icons.cloud_done : Icons.cloud_upload_outlined),
-                      label: Text(_synced ? 'Sincronizado' : 'Sincronizar Laudo'),
+                          : Icon(_synced
+                              ? Icons.cloud_done_rounded
+                              : Icons.cloud_upload_outlined),
+                      label:
+                          Text(_synced ? 'Sincronizado' : 'Enviar ao Portal'),
                     ),
                   ),
                 ],
@@ -217,170 +275,361 @@ Sistema ISO Test • Qualificação Térmica ISO 23953
   }
 }
 
-class _VerdictCard extends StatelessWidget {
-  final TestResult result;
-  final Color color;
-  final bool passed;
-
-  const _VerdictCard({required this.result, required this.color, required this.passed});
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(22),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          CircleAvatar(
-            radius: 26,
-            backgroundColor: color.withValues(alpha: .12),
-            child: Icon(passed ? Icons.check_circle_rounded : Icons.warning_amber_rounded, color: color, size: 32),
-          ),
-          const SizedBox(width: 14),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(
-              passed ? 'QUALIFICAÇÃO APROVADA' : 'QUALIFICAÇÃO REPROVADA',
-              style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 1),
-            ),
-            const SizedBox(height: 2),
-            Text(result.serialNumber, style: Theme.of(context).textTheme.titleLarge),
-          ])),
-        ]),
-        const SizedBox(height: 16),
-        Text(result.verdictReason, style: const TextStyle(fontSize: 15, height: 1.45)),
-      ]),
-    ),
-  );
-}
-
-class _ChartCard extends StatelessWidget {
+class _VerdictHeroCard extends StatelessWidget {
   final TestResult result;
   final Color color;
 
-  const _ChartCard({required this.result, required this.color});
+  const _VerdictHeroCard({required this.result, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    final spots = <FlSpot>[];
-    if (result.readings.isNotEmpty) {
-      final start = result.readings.first.timestamp;
-      for (final reading in result.readings) {
-        spots.add(FlSpot(reading.timestamp.difference(start).inMinutes.toDouble(), reading.temperature));
-      }
-    }
+    final String statusTitle = switch (result.status) {
+      TestStatus.aprovada => 'QUALIFICAÇÃO APROVADA',
+      TestStatus.reprovada => 'REPROVADA • FALHA DETECTADA',
+      TestStatus.inconclusiva => 'ENSAIO INCONCLUSIVO',
+    };
+    final IconData icon = switch (result.status) {
+      TestStatus.aprovada => Icons.verified_rounded,
+      TestStatus.reprovada => Icons.warning_amber_rounded,
+      TestStatus.inconclusiva => Icons.hourglass_bottom_rounded,
+    };
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('Curva de resfriamento', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 4),
-          const Text('Temperatura registrada ao longo do ensaio.'),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 240,
-            child: LineChart(LineChartData(
-              minX: spots.isEmpty ? 0 : spots.first.x,
-              maxX: spots.isEmpty ? 1 : spots.last.x,
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                horizontalInterval: 5,
-                getDrawingHorizontalLine: (_) => const FlLine(color: AppColors.line, strokeWidth: 1),
-              ),
-              borderData: FlBorderData(show: false),
-              titlesData: FlTitlesData(
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                leftTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 42,
-                    getTitlesWidget: (value, _) => Text('${value.toInt()}°', style: const TextStyle(fontSize: 11, color: AppColors.slate)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundColor: color.withValues(alpha: 0.14),
+                  child: Icon(icon, color: color, size: 28),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        statusTitle,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        result.serialNumber,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                    ],
                   ),
                 ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 28,
-                    interval: spots.isEmpty ? 1 : (spots.last.x / 4).clamp(1, 60).toDouble(),
-                    getTitlesWidget: (value, _) => Text('${value.toInt()}m', style: const TextStyle(fontSize: 11, color: AppColors.slate)),
+                if (result.isSimulated)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.warningBg,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'SIMULAÇÃO',
+                      style: TextStyle(
+                        color: AppColors.warning,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: spots,
-                  color: color,
-                  barWidth: 4,
-                  isCurved: true,
-                  curveSmoothness: .22,
-                  dotData: const FlDotData(show: false),
-                  belowBarData: BarAreaData(show: true, color: color.withValues(alpha: .08)),
-                ),
               ],
-            )),
-          ),
-          const SizedBox(height: 12),
-          Wrap(spacing: 10, runSpacing: 10, children: [
-            _Metric(label: 'Inicial', value: '${result.initialTemp.toStringAsFixed(1)}°C'),
-            _Metric(label: 'Final', value: '${result.finalTemp.toStringAsFixed(1)}°C'),
-            _Metric(label: 'Taxa', value: '${result.coolingRate.toStringAsFixed(2)}°C/min'),
-            _Metric(label: 'Duração', value: '${result.durationMinutes} min'),
-          ]),
-        ]),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              result.verdictReason,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontSize: 14.5,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _Metric extends StatelessWidget {
+class _DiagnosisChecklistCard extends StatelessWidget {
+  final TestResult result;
+  final Color color;
+
+  const _DiagnosisChecklistCard({required this.result, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.build_circle_outlined, color: color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    result.faultCategory.label,
+                    style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (result.probableCauses.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Causas Prováveis',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  color: AppColors.ink,
+                ),
+              ),
+              const SizedBox(height: 6),
+              ...result.probableCauses.map(
+                (c) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('• ',
+                          style: TextStyle(fontWeight: FontWeight.w900)),
+                      Expanded(
+                        child: Text(c,
+                            style: const TextStyle(
+                                color: AppColors.slate, fontSize: 13)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (result.recommendedActions.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Ações Recomendadas em Oficina',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  color: AppColors.ink,
+                ),
+              ),
+              const SizedBox(height: 6),
+              ...result.recommendedActions.map(
+                (a) => Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.check_box_outlined,
+                          size: 16, color: AppColors.indigo),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(a,
+                            style: const TextStyle(
+                                color: AppColors.ink, fontSize: 13)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChartSection extends StatelessWidget {
+  final TestResult result;
+  final Color color;
+
+  const _ChartSection({required this.result, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Curva de Pull-Down (${result.readings.length} pts)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 14),
+            ThermalCurveChart(
+              readings: result.readings,
+              targetTemp: result.profile.targetTemperature,
+              safetyMinTemp: result.profile.safetyMinTemperature,
+              accentColor: color,
+              height: 230,
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _MetricPill('Inicial (T0)', '${result.initialTemp.toStringAsFixed(1)}°C'),
+                _MetricPill('Final', '${result.finalTemp.toStringAsFixed(1)}°C'),
+                _MetricPill('Taxa Média', '${result.coolingRate.toStringAsFixed(2)}°C/min'),
+                _MetricPill('Duração', '${result.durationMinutes} min'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MetricPill extends StatelessWidget {
   final String label;
   final String value;
-  const _Metric({required this.label, required this.value});
+  const _MetricPill(this.label, this.value);
+
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-    decoration: BoxDecoration(color: AppColors.snow, borderRadius: BorderRadius.circular(12)),
-    child: Text.rich(TextSpan(
-      text: '$label  ',
-      style: const TextStyle(color: AppColors.slate, fontSize: 12),
-      children: [TextSpan(text: value, style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w900))],
-    )),
-  );
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text.rich(
+        TextSpan(
+          text: '$label  ',
+          style: const TextStyle(color: AppColors.slate, fontSize: 12),
+          children: [
+            TextSpan(
+              text: value,
+              style: const TextStyle(
+                  color: AppColors.ink, fontWeight: FontWeight.w900),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _DetailsCard extends StatelessWidget {
+class _AuditDetailsCard extends StatelessWidget {
   final TestResult result;
-  const _DetailsCard({required this.result});
+  const _AuditDetailsCard({required this.result});
+
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('Dados do ensaio', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 16),
-        _Detail(label: 'Modelo', value: result.modelName),
-        _Detail(label: 'Técnico', value: result.technicianName),
-        _Detail(label: 'Perfil', value: result.profile.name.split(' (').first),
-        _Detail(label: 'Setpoint', value: '${result.profile.targetTemperature}°C'),
-        _Detail(label: 'Tempo permitido', value: '${result.effectiveAllowedMinutes} min'),
-        _Detail(label: 'ID do laudo', value: result.testId, last: true),
-      ]),
-    ),
-  );
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Rastreabilidade & Auditoria',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            _DetailRow('Modelo', result.modelName),
+            _DetailRow('Técnico', result.technicianName),
+            _DetailRow('Perfil', result.profile.displayShort),
+            _DetailRow('Setpoint', '${result.profile.targetTemperature}°C'),
+            _DetailRow('Limite tempo', '${result.effectiveAllowedMinutes} min'),
+            _DetailRow('Baseline T0',
+                result.t0Validated ? 'Validado' : 'Pré-resfriado'),
+            _DetailRow('Origem dados', result.dataSource),
+            if (result.sensorName.isNotEmpty)
+              _DetailRow('Sensor', result.sensorName),
+            if (result.reportedSymptom.isNotEmpty)
+              _DetailRow('Queixa', result.reportedSymptom),
+            _DetailRow('ID do laudo', result.testId, last: result.manualNotes.isEmpty),
+            if (result.manualNotes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'Anotações de Campo',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                  color: AppColors.ink,
+                ),
+              ),
+              const SizedBox(height: 4),
+              ...result.manualNotes.map(
+                (n) => Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text('• $n',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.slate)),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _Detail extends StatelessWidget {
+class _DetailRow extends StatelessWidget {
   final String label;
   final String value;
   final bool last;
-  const _Detail({required this.label, required this.value, this.last = false});
+
+  const _DetailRow(this.label, this.value, {this.last = false});
+
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(vertical: 11),
-    decoration: BoxDecoration(border: last ? null : const Border(bottom: BorderSide(color: AppColors.line))),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(width: 116, child: Text(label, style: const TextStyle(color: AppColors.slate, fontSize: 12))),
-      Expanded(child: Text(value, textAlign: TextAlign.right, style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w800, fontSize: 13))),
-    ]),
-  );
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        border: last
+            ? null
+            : const Border(bottom: BorderSide(color: AppColors.line)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(
+              label,
+              style: const TextStyle(color: AppColors.slate, fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontWeight: FontWeight.w800,
+                fontSize: 12.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

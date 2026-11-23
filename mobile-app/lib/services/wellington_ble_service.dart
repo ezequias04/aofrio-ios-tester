@@ -131,6 +131,7 @@ class WellingtonBleService {
   BluetoothCharacteristic? _assetTrackTxChar;
   BluetoothCharacteristic? _bulkTxChar;
   BluetoothCharacteristic? _rxChar;
+  bool _suspendWatchdog = false;
 
   final _statusController = StreamController<Uint8List>.broadcast();
   final _eventBlockController = StreamController<Uint8List>.broadcast();
@@ -169,7 +170,7 @@ class WellingtonBleService {
           .timeout(const Duration(seconds: 6));
     } on TimeoutException {
       throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
-          'permita o acesso em Ajustes > AoFrio Test.');
+          'permita o acesso em Ajustes > ISO Test.');
     }
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
 
@@ -264,7 +265,7 @@ class WellingtonBleService {
           .timeout(const Duration(seconds: 6));
     } on TimeoutException {
       throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
-          'permita o acesso em Ajustes > AoFrio Test.');
+          'permita o acesso em Ajustes > ISO Test.');
     }
     final latest = <String, LiveTelemetry>{};
     await FlutterBluePlus.startScan(
@@ -272,20 +273,37 @@ class WellingtonBleService {
       androidScanMode: AndroidScanMode.lowLatency,
       androidUsesFineLocation: false,
     );
+    final watchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!_suspendWatchdog && !_isConnected && !FlutterBluePlus.isScanningNow) {
+        try {
+          await FlutterBluePlus.startScan(
+            continuousUpdates: true,
+            androidScanMode: AndroidScanMode.lowLatency,
+            androidUsesFineLocation: false,
+          );
+        } catch (_) {}
+      }
+    });
     try {
       await for (final results in FlutterBluePlus.scanResults) {
         for (final r in results) {
           final w = r.advertisementData.manufacturerData[0x578];
-          if (w == null || !_isWellingtonMonitor(r)) continue;
+          if (w == null && !_isWellingtonMonitor(r)) continue;
           final id = r.device.remoteId.str;
+          final tail = w != null ? _asciiTail(w) : '';
+          final name = tail.isNotEmpty ? tail : _nameOf(r);
           latest[id] = LiveTelemetry(
             deviceId: id,
             at: DateTime.now(),
-            temperatureC: decodeAdvTemp(w),
+            temperatureC: w != null ? decodeAdvTemp(w) : null,
             rssi: r.rssi,
-            assetName: _asciiTail(w).isNotEmpty ? _asciiTail(w) : _nameOf(r),
-            flagBytes: w.length >= 2 ? [w[0], w[1]] : List<int>.from(w),
-            rawHex: w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+            assetName: name.isEmpty ? id : name,
+            flagBytes: w == null
+                ? const []
+                : (w.length >= 2 ? [w[0], w[1]] : List<int>.from(w)),
+            rawHex: w == null
+                ? ''
+                : w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
           );
         }
         if (latest.isEmpty) continue;
@@ -293,7 +311,10 @@ class WellingtonBleService {
         yield list;
       }
     } finally {
-      await FlutterBluePlus.stopScan();
+      watchdog.cancel();
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {}
     }
   }
 
@@ -313,7 +334,7 @@ class WellingtonBleService {
           .timeout(const Duration(seconds: 6));
     } on TimeoutException {
       throw Exception('Bluetooth desligado ou sem permissão. Ative o Bluetooth e '
-          'permita o acesso em Ajustes > AoFrio Test.');
+          'permita o acesso em Ajustes > ISO Test.');
     }
     final readings = <SensorReading>[];
     String? targetId;
@@ -628,6 +649,80 @@ class WellingtonBleService {
     return lines;
   }
 
+  /// Conecta em um sensor específico, lê o relógio RTC, baixa páginas da memória
+  /// flash via protocolo SCS Field (`cmd 5/1/3`) e decodifica com `decodeStatsV2`,
+  /// usando a versão real de protocolo informada pelo primeiro bloco.
+  Future<FlashDownloadResult> downloadDecodedFlashHistory(
+    String deviceId, {
+    int reqTimeSecs = 0,
+  }) async {
+    const assumedProtocolVersion = 70;
+    final lines = <String>['Sensor alvo: $deviceId'];
+
+    _suspendWatchdog = true;
+    try {
+      await stopScan();
+    } catch (_) {}
+
+    await connect(deviceId);
+    try {
+      final sensorTs = await requestSensorTimestamp();
+      final offset = DateTime.now().millisecondsSinceEpoch ~/ 1000 - sensorTs;
+      lines.add('Relógio RTC do sensor: $sensorTs s (offset ${offset}s)');
+
+      var fast = true;
+      List<ScsEventBlock> blocks;
+      try {
+        blocks = await downloadEventLog(
+          reqTimeSecs: reqTimeSecs,
+          protocolVersion: assumedProtocolVersion,
+          fastRead: true,
+        );
+      } catch (e) {
+        lines.add('Modo rápido falhou ($e). Alternando para leitura chunk a chunk.');
+        fast = false;
+        blocks = await downloadEventLog(
+          reqTimeSecs: reqTimeSecs,
+          protocolVersion: assumedProtocolVersion,
+          fastRead: false,
+        );
+      }
+      lines.add('Modo de leitura: ${fast ? 'rápido (BULK)' : 'normal (TX)'} • Blocos válidos: ${blocks.length}');
+
+      final realPv = (blocks.isNotEmpty && blocks.first.protocolVersion > 0)
+          ? blocks.first.protocolVersion
+          : assumedProtocolVersion;
+
+      final readings = decodeStatsV2(
+        blocks: blocks,
+        sensorToUnixOffsetSecs: offset,
+        protocolVersion: realPv,
+      )..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      lines.add('protocolVersion detectado: $realPv');
+      lines.add('Leituras térmicas decodificadas: ${readings.length}');
+      if (readings.isNotEmpty) {
+        lines.add('Início: ${readings.first.temperature.toStringAsFixed(1)}°C em ${readings.first.timestamp.toLocal()}');
+        lines.add('Fim: ${readings.last.temperature.toStringAsFixed(1)}°C em ${readings.last.timestamp.toLocal()}');
+      }
+
+      return FlashDownloadResult(
+        deviceId: deviceId,
+        sensorTimestamp: sensorTs,
+        offsetSeconds: offset,
+        usedFastMode: fast,
+        blockCount: blocks.length,
+        protocolVersion: realPv,
+        firstBlockStatus: blocks.isNotEmpty ? blocks.first.status : null,
+        readings: readings,
+        diagnosticLines: lines,
+      );
+    } finally {
+      await disconnect();
+      _suspendWatchdog = false;
+    }
+  }
+
   /// Procura um Monitor no scan (12 s) e devolve o id do dispositivo, ou null.
   Future<String?> _findMonitorId() async {
     final found = Completer<String?>();
@@ -937,6 +1032,31 @@ class _AdvSample {
   final String hex;
   final List<int> bytes;
   const _AdvSample(this.at, this.hex, this.bytes);
+}
+
+/// Resultado estruturado do download de páginas da memória flash interna SCS.
+class FlashDownloadResult {
+  final String deviceId;
+  final int sensorTimestamp;
+  final int offsetSeconds;
+  final bool usedFastMode;
+  final int blockCount;
+  final int protocolVersion;
+  final int? firstBlockStatus;
+  final List<SensorReading> readings;
+  final List<String> diagnosticLines;
+
+  const FlashDownloadResult({
+    required this.deviceId,
+    required this.sensorTimestamp,
+    required this.offsetSeconds,
+    required this.usedFastMode,
+    required this.blockCount,
+    required this.protocolVersion,
+    this.firstBlockStatus,
+    required this.readings,
+    required this.diagnosticLines,
+  });
 }
 
 /// Dispositivo BLE encontrado no scan (nome anunciado + sinal).

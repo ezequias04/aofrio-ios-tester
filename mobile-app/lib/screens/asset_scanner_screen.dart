@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-
 import '../theme/app_theme.dart';
 
 class AssetScannerScreen extends StatefulWidget {
@@ -11,7 +10,15 @@ class AssetScannerScreen extends StatefulWidget {
 }
 
 class _AssetScannerScreenState extends State<AssetScannerScreen> {
+  final MobileScannerController _scannerController = MobileScannerController();
   bool _handled = false;
+  bool _torchOn = false;
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
 
   void _onDetect(BarcodeCapture capture) {
     if (_handled || capture.barcodes.isEmpty) return;
@@ -24,23 +31,39 @@ class _AssetScannerScreenState extends State<AssetScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.ink,
+      backgroundColor: AppColors.obsidian,
       appBar: AppBar(
-        title: const Text('Ler patrimônio'),
-        backgroundColor: AppColors.ink,
+        title: const Text('Ler Patrimônio'),
+        backgroundColor: AppColors.obsidian,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Lanterna',
+            onPressed: () async {
+              await _scannerController.toggleTorch();
+              if (mounted) setState(() => _torchOn = !_torchOn);
+            },
+            icon: Icon(
+              _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+              color: _torchOn ? AppColors.amber : Colors.white,
+            ),
+          ),
+        ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(onDetect: _onDetect),
+          MobileScanner(
+            controller: _scannerController,
+            onDetect: _onDetect,
+          ),
           IgnorePointer(
             child: Center(
               child: Container(
                 width: 260,
                 height: 260,
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.white, width: 3),
+                  border: Border.all(color: AppColors.cryoBright, width: 3),
                   borderRadius: BorderRadius.circular(24),
                 ),
               ),
@@ -51,9 +74,10 @@ class _AssetScannerScreenState extends State<AssetScannerScreen> {
             child: SafeArea(
               minimum: EdgeInsets.all(24),
               child: Text(
-                'Posicione o QR Code dentro da moldura',
+                'Aponte a câmera para o QR Code ou código de barras do patrimônio',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                style:
+                    TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
               ),
             ),
           ),

@@ -7,6 +7,8 @@ import '../models/bench_session.dart';
 abstract final class ActiveSessionsStore {
   static const _sessionsKey = 'iso_test_active_sessions_v2';
   static const _techKey = 'iso_test_last_technician';
+  static const _badgeKey = 'iso_test_technician_badge';
+  static const _pinKey = 'iso_test_technician_pin';
   static const _demoKey = 'iso_test_demo_mode';
 
   static Future<List<BenchSession>> loadSessions() async {
@@ -40,6 +42,28 @@ abstract final class ActiveSessionsStore {
     if (trimmed.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_techKey, trimmed);
+  }
+
+  static Future<String> loadTechnicianBadge() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_badgeKey) ?? '';
+  }
+
+  static Future<void> saveTechnicianBadge(String badge) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_badgeKey, badge.trim());
+  }
+
+  // ponytail: PIN guardado no armazenamento do app (só o próprio app lê);
+  // se o risco passar a ser aparelho com root, trocar por flutter_secure_storage.
+  static Future<String> loadTechnicianPin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_pinKey) ?? '';
+  }
+
+  static Future<void> saveTechnicianPin(String pin) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pinKey, pin.trim());
   }
 
   static Future<bool> loadDemoMode() async {

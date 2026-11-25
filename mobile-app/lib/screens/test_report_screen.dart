@@ -16,34 +16,6 @@ class TestReportScreen extends StatefulWidget {
 }
 
 class _TestReportScreenState extends State<TestReportScreen> {
-  bool _isSyncing = false;
-  late bool _synced;
-  String? _syncMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    _synced = widget.result.synced;
-  }
-
-  Future<void> _syncToWebPortal() async {
-    final controller = BenchScope.of(context);
-    setState(() {
-      _isSyncing = true;
-      _syncMessage = null;
-    });
-
-    final outcome = await controller.syncSingleReport(widget.result);
-
-    if (mounted) {
-      setState(() {
-        _isSyncing = false;
-        _synced = outcome.success;
-        _syncMessage = outcome.message;
-      });
-    }
-  }
-
   Future<void> _deleteReport() async {
     final controller = BenchScope.of(context);
     final ok = await showDialog<bool>(
@@ -51,7 +23,7 @@ class _TestReportScreenState extends State<TestReportScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Excluir laudo deste aparelho?'),
         content: Text(
-          'Remover o registro local de ${widget.result.serialNumber}? Esta ação não afeta laudos já enviados ao portal.',
+          'Remover o registro local de ${widget.result.serialNumber}?',
         ),
         actions: [
           TextButton(
@@ -117,13 +89,32 @@ $actionsText
 $notesText
 
 ID Rastreabilidade: ${r.testId}
-Sistema ISO Test • Qualificacao Termica ISO 23953
+Ensaio de pull-down em campo com 1 sensor. Nao e ensaio normativo em camara climatica
+(ISO 23953) e nao substitui certificacao do fabricante.
 ''';
 
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Laudo completo copiado para WhatsApp ou Email.'),
+        backgroundColor: AppColors.approved,
+      ),
+    );
+  }
+
+  /// Exporta as leituras de temperatura em CSV (data/hora ISO local e °C) para
+  /// a área de transferência: dá para colar em planilha, e-mail ou WhatsApp.
+  void _copyReadingsCsv() {
+    final r = widget.result;
+    final sb = StringBuffer('equipamento,data_hora,temperatura_c\n');
+    for (final p in r.readings) {
+      sb.writeln(
+          '${r.serialNumber},${p.timestamp.toLocal().toIso8601String()},${p.temperature.toStringAsFixed(2)}');
+    }
+    Clipboard.setData(ClipboardData(text: sb.toString()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${r.readings.length} leituras copiadas em CSV.'),
         backgroundColor: AppColors.approved,
       ),
     );
@@ -197,28 +188,6 @@ Sistema ISO Test • Qualificacao Termica ISO 23953
                         const SizedBox(height: 14),
                         _AuditDetailsCard(result: result),
                       ],
-                      if (_syncMessage != null) ...[
-                        const SizedBox(height: 14),
-                        Container(
-                          padding: const EdgeInsets.all(13),
-                          decoration: BoxDecoration(
-                            color: _synced
-                                ? AppColors.approvedBg
-                                : AppColors.warningBg,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(
-                            _syncMessage!,
-                            style: TextStyle(
-                              color: _synced
-                                  ? AppColors.approved
-                                  : AppColors.warning,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -251,18 +220,9 @@ Sistema ISO Test • Qualificacao Termica ISO 23953
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: _isSyncing || _synced ? null : _syncToWebPortal,
-                      icon: _isSyncing
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : Icon(_synced
-                              ? Icons.cloud_done_rounded
-                              : Icons.cloud_upload_outlined),
-                      label:
-                          Text(_synced ? 'Sincronizado' : 'Enviar ao Portal'),
+                      onPressed: _copyReadingsCsv,
+                      icon: const Icon(Icons.table_chart_outlined),
+                      label: const Text('Exportar CSV'),
                     ),
                   ),
                 ],
@@ -284,7 +244,7 @@ class _VerdictHeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String statusTitle = switch (result.status) {
-      TestStatus.aprovada => 'QUALIFICAÇÃO APROVADA',
+      TestStatus.aprovada => 'PULL-DOWN APROVADO',
       TestStatus.reprovada => 'REPROVADA • FALHA DETECTADA',
       TestStatus.inconclusiva => 'ENSAIO INCONCLUSIVO',
     };

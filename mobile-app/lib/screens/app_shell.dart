@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../theme/app_theme.dart';
+import '../widgets/identity_dialog.dart';
 import 'commissioning_wizard_screen.dart';
 import 'tabs/bench_tab.dart';
 import 'tabs/reports_tab.dart';
@@ -16,6 +17,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _tabIndex = 0;
+  bool _askingIdentity = false;
 
   void _openWizard({String? preselectedSensorId}) {
     Navigator.of(context).push(
@@ -30,8 +32,16 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final controller = BenchScope.of(context);
     final activeCount = controller.activeSessions.length;
-    final sensorCount = controller.discoveredSensors.length;
-    final reportCount = controller.savedReports.length;
+
+    // Primeiro uso: ninguém testa sem se identificar (nome + matrícula).
+    if (controller.initialized && !controller.hasIdentity && !_askingIdentity) {
+      _askingIdentity = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await showIdentityDialog(context, controller, required: true);
+        if (mounted) _askingIdentity = false;
+      });
+    }
 
     return Scaffold(
       body: IndexedStack(
@@ -58,7 +68,7 @@ class _AppShellState extends State<AppShell> {
               elevation: 2,
               icon: const Icon(Icons.add_link_rounded),
               label: const Text(
-                'Novo Diagnóstico',
+                'Novo teste',
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
             )
@@ -82,32 +92,17 @@ class _AppShellState extends State<AppShell> {
                 color: AppColors.indigo,
                 child: const Icon(Icons.dashboard_rounded),
               ),
+              // Número = ensaios rodando agora (o único contador que pede ação).
               label: 'Bancada',
             ),
             NavigationDestination(
-              icon: _CountBadge(
-                count: sensorCount,
-                color: AppColors.cryo,
-                child: const Icon(Icons.sensors_outlined),
-              ),
-              selectedIcon: _CountBadge(
-                count: sensorCount,
-                color: AppColors.cryo,
-                child: const Icon(Icons.sensors_rounded),
-              ),
+              icon: const Icon(Icons.sensors_outlined),
+              selectedIcon: const Icon(Icons.sensors_rounded),
               label: 'Sensores',
             ),
             NavigationDestination(
-              icon: _CountBadge(
-                count: reportCount,
-                color: AppColors.approved,
-                child: const Icon(Icons.assignment_outlined),
-              ),
-              selectedIcon: _CountBadge(
-                count: reportCount,
-                color: AppColors.approved,
-                child: const Icon(Icons.assignment_rounded),
-              ),
+              icon: const Icon(Icons.assignment_outlined),
+              selectedIcon: const Icon(Icons.assignment_rounded),
               label: 'Laudos',
             ),
             const NavigationDestination(

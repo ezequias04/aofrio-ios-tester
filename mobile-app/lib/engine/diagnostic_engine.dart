@@ -9,6 +9,26 @@ import '../models/test_result.dart';
 /// Analisa séries temporais em tempo real na bancada e gera laudos com causa raiz
 /// e checklist técnico de reparo.
 class DiagnosticEngine {
+  /// Laudo feito com dados parciais (memória flash): mínimo de leituras e de
+  /// tempo coberto. Antes bastavam 2 leituras, o que não sustenta um laudo.
+  static const int minPartialReadings = 8;
+  static const Duration minPartialSpan = Duration(minutes: 20);
+
+  /// Mensagem de "dados insuficientes" para dados parciais, ou null se dá para gerar o laudo.
+  static String? insufficientPartialData(List<SensorReading> readings) {
+    if (readings.length < minPartialReadings) {
+      return 'Dados insuficientes: o sensor tem ${readings.length} leitura(s) gravada(s); '
+          'o laudo precisa de pelo menos $minPartialReadings.';
+    }
+    final times = readings.map((r) => r.timestamp).toList()..sort();
+    final span = times.last.difference(times.first);
+    if (span < minPartialSpan) {
+      return 'Dados insuficientes: as leituras cobrem só ${span.inMinutes} min; '
+          'o laudo precisa de pelo menos ${minPartialSpan.inMinutes} min de registro.';
+    }
+    return null;
+  }
+
   /// Avalia o comportamento térmico em tempo real para exibir fase, taxa, ETA
   /// e eventuais indícios de falha enquanto o ensaio ainda está rodando.
   static LiveDiagnosticSnapshot evaluateLive({
@@ -136,7 +156,7 @@ class DiagnosticEngine {
       headline =
           'Setpoint ${profile.targetTemperature.toStringAsFixed(1)}°C atingido aos ${targetReachedMinutes ?? elapsedMin.round()} min';
       subtext =
-          'Sistema atingiu a meta normativa. Você já pode encerrar e emitir o laudo oficial.';
+          'Sistema atingiu a meta do perfil. Você já pode encerrar e gerar o laudo.';
     } else if (dropAt15 != null && dropAt15 < profile.minInitialDrop15) {
       phase = DiagnosticPhase.verificandoPartida;
       health = LiveHealth.critico;
@@ -243,10 +263,12 @@ class DiagnosticEngine {
     List<String> manualNotes = const [],
     bool allowPartial = false,
   }) {
-    final minRequired = allowPartial ? 2 : 5;
-    if (readings.length < minRequired) {
+    if (allowPartial) {
+      final problem = insufficientPartialData(readings);
+      if (problem != null) throw ArgumentError(problem);
+    } else if (readings.length < 5) {
       throw ArgumentError(
-        'Série temporal com dados insuficientes para análise (mínimo $minRequired leituras).',
+        'Série temporal com dados insuficientes para análise (mínimo 5 leituras).',
       );
     }
 
@@ -436,7 +458,7 @@ class DiagnosticEngine {
               'Ensaio encerrado antes da conclusão aos $durationMinutes min em ${lastReading.temperature.toStringAsFixed(1)}°C '
               '(taxa saudável de ${avgRate.toStringAsFixed(2)}°C/min; previsão de atingir ${profile.targetTemperature}°C em ~$eta min adicionais).',
           probableCauses: const [
-            'Coleta encerrada manualmente antes do prazo normativo completo.',
+            'Coleta encerrada manualmente antes do prazo completo do perfil.',
           ],
           recommendedActions: const [
             'Repetir ou continuar o ensaio até completar a janela pull-down ou baixar o log da memória flash do sensor após estabilização.',
@@ -743,7 +765,7 @@ class DiagnosticEngine {
       summary:
           'Baixa eficiência de remoção de calor: após $durationMinutes min de ensaio, '
           'o equipamento estabilizou em ${finalTemp.toStringAsFixed(1)}°C sem alcançar ${profile.targetTemperature}°C '
-          '(limite normativo: $allowedMinutes min).',
+          '(limite do perfil: $allowedMinutes min).',
       probableCauses: const [
         'Microvazamento com perda parcial de carga de gás refrigerante.',
         'Filtro secador saturado ou tubo capilar parcialmente obstruído.',

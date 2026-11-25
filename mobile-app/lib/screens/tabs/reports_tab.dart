@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../main.dart';
 import '../../models/diagnostic_finding.dart';
 import '../../models/test_result.dart';
@@ -23,15 +24,32 @@ class _ReportsTabState extends State<ReportsTab> {
     super.dispose();
   }
 
-  Future<void> _syncAll() async {
-    final controller = BenchScope.of(context);
-    final outcome = await controller.syncAllPendingReports();
-    if (!mounted) return;
+  /// Exporta todos os laudos do aparelho em CSV (uma linha por laudo) para a
+  /// área de transferência: cópia de segurança em planilha ou e-mail.
+  void _exportAll(List<TestResult> all) {
+    String c(Object? v) => '"${(v ?? '').toString().replaceAll('"', '""')}"';
+    final sb = StringBuffer(
+        'data_hora,equipamento,modelo,tecnico,perfil,status,diagnostico,temp_inicial_c,temp_final_c,duracao_min,leituras\n');
+    for (final r in all) {
+      sb.writeln([
+        c(r.startTime.toLocal().toIso8601String()),
+        c(r.serialNumber),
+        c(r.modelName),
+        c(r.technicianName),
+        c(r.profile.name),
+        c(r.status.name),
+        c(r.faultCategory.label),
+        c(r.initialTemp.toStringAsFixed(1)),
+        c(r.finalTemp.toStringAsFixed(1)),
+        c(r.durationMinutes),
+        c(r.readings.length),
+      ].join(','));
+    }
+    Clipboard.setData(ClipboardData(text: sb.toString()));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(outcome.message),
-        backgroundColor:
-            outcome.failedCount == 0 ? AppColors.approved : AppColors.warning,
+        content: Text('${all.length} laudo(s) copiados em CSV. Cole numa planilha ou e-mail.'),
+        backgroundColor: AppColors.approved,
       ),
     );
   }
@@ -46,7 +64,6 @@ class _ReportsTabState extends State<ReportsTab> {
     final rejectedCount =
         all.where((r) => r.status == TestStatus.reprovada).length;
     final rate = all.isEmpty ? 0.0 : (approvedCount / all.length) * 100.0;
-    final unsynced = controller.unsyncedCount;
 
     final filtered = all.where((r) {
       if (_filterStatus != null && r.status != _filterStatus) return false;
@@ -64,6 +81,13 @@ class _ReportsTabState extends State<ReportsTab> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Laudos e Diagnósticos'),
+        actions: [
+          TextButton.icon(
+            onPressed: all.isEmpty ? null : () => _exportAll(all),
+            icon: const Icon(Icons.table_chart_outlined),
+            label: const Text('Exportar todos'),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
@@ -84,36 +108,21 @@ class _ReportsTabState extends State<ReportsTab> {
                 ),
               ],
             ),
-            if (unsynced > 0) ...[
+            if (all.length >= 200) ...[
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: AppColors.indigoSoft,
+                  color: AppColors.warningBg,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.cloud_upload_outlined,
-                        color: AppColors.indigo),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '$unsynced laudo(s) salvo(s) aguardando sincronização.',
-                        style: const TextStyle(
-                          color: AppColors.ink,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: controller.isSyncingBatch ? null : _syncAll,
-                      child: Text(controller.isSyncingBatch
-                          ? 'Enviando...'
-                          : 'Sincronizar'),
-                    ),
-                  ],
+                child: Text(
+                  '${all.length} laudos guardados neste aparelho. Toque em "Exportar todos" e apague os antigos para o app não ficar pesado. Nenhum laudo é apagado sozinho.',
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],

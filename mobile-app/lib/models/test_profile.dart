@@ -56,10 +56,10 @@ class TestProfile {
   static const List<TestProfile> defaultProfiles = [
     TestProfile(
       id: 'coca_cola_positive',
-      name: 'Positiva Bebidas (Coca-Cola / KORE)',
-      shortLabel: 'Coca-Cola KORE',
+      name: 'Positiva Bebidas (+3°C)',
+      shortLabel: 'Positiva Bebidas',
       categoryTag: 'Positiva +3°C',
-      standardName: 'Padrão Coca-Cola Bottler Spec • KORE Engineering',
+      standardName: 'Critério de campo • pull-down positivo',
       description:
           'Expositores verticais e visicoolers de refrigerantes/água. Faixa ideal de +2°C a +4°C em até 180 min; proibido atingir abaixo de 0°C.',
       targetTemperature: 3.0,
@@ -71,10 +71,10 @@ class TestProfile {
     ),
     TestProfile(
       id: 'beer_cooler_subzero',
-      name: 'Cervejeira Sub-Zero (Ambev / Heineken)',
+      name: 'Cervejeira Sub-Zero (-2°C)',
       shortLabel: 'Cervejeira Sub-Zero',
       categoryTag: 'Sub-Zero -2°C',
-      standardName: 'Padrão Comercial de Cervejeiras • Sub-Zero',
+      standardName: 'Critério de campo • pull-down sub-zero',
       description:
           'Cervejeiras comerciais de alta demanda. Meta -2°C (faixa -4°C a 0°C) em até 240 min; alerta crítico se cair abaixo de -5°C (risco de congelar garrafa).',
       targetTemperature: -2.0,
@@ -86,10 +86,10 @@ class TestProfile {
     ),
     TestProfile(
       id: 'freezer_frozen_l1',
-      name: 'Freezer Negativo / Sorvetes (ISO L1/L2)',
-      shortLabel: 'Freezer ISO L1/L2',
+      name: 'Freezer Negativo / Sorvetes (-18°C)',
+      shortLabel: 'Freezer -18°C',
       categoryTag: 'Congelados -18°C',
-      standardName: 'ISO 23953 Classe L1/L2 • Alimentos Congelados',
+      standardName: 'Critério de campo • congelados (referência ISO 23953 L1/L2)',
       description:
           'Conservadores de gelo, sorvetes e congelados. Meta -18°C em até 360 min com controle de degeneração térmica.',
       targetTemperature: -18.0,
@@ -101,12 +101,12 @@ class TestProfile {
     ),
     TestProfile(
       id: 'iso_23953_m1',
-      name: 'ABNT NBR ISO 23953 (Classe M1)',
-      shortLabel: 'ABNT ISO M1',
+      name: 'Expositor Positivo (+3,5°C)',
+      shortLabel: 'Expositor +3,5°C',
       categoryTag: 'Positiva +3,5°C',
-      standardName: 'Norma Brasileira ABNT NBR ISO 23953-2 Classe M1',
+      standardName: 'Critério de campo • expositor positivo (referência ISO 23953 M1)',
       description:
-          'Balcões e expositores comerciais gerais pela norma brasileira. Meta +3,5°C (faixa +2°C a +5°C) em até 210 min.',
+          'Balcões e expositores comerciais gerais. Meta +3,5°C (faixa +2°C a +5°C) em até 210 min.',
       targetTemperature: 3.5,
       differential: 1.5,
       manualMaxAllowedMinutes: 210,

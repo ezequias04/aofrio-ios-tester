@@ -3,6 +3,7 @@ name: Build ISO Test (iOS IPA + Android APK)
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 defaults:
@@ -10,7 +11,31 @@ defaults:
     working-directory: mobile-app
 
 jobs:
+  # Portão de qualidade: nenhum app é gerado se a análise ou os testes falharem.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+      - run: flutter pub get
+      - name: flutter analyze
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze.log; then
+            grep -E "error •|warning •" analyze.log | head -60 \
+              | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+      - run: flutter test
+
   build-ios:
+    needs: check
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -20,7 +45,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build ios --release --no-codesign --dart-define=AOFRIO_API_TOKEN=${{ secrets.AOFRIO_API_TOKEN }}
+      - run: flutter build ios --release --no-codesign
       - name: Empacotar Payload/Runner.app em AoFrioTester.ipa
         run: |
           mkdir -p build/ios/ipa/Payload
@@ -34,6 +59,7 @@ jobs:
           if-no-files-found: error
 
   build-android:
+    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -52,7 +78,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if ! flutter build apk --release --dart-define=AOFRIO_API_TOKEN=${{ secrets.AOFRIO_API_TOKEN }} 2>&1 | tee build.log; then
+          if ! flutter build apk --release 2>&1 | tee build.log; then
             # Publica o motivo como anotação (legível sem acesso de admin ao log)
             grep -A12 -E "What went wrong|Error:|error:" build.log | head -60 \
               | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error::$l"; done

@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
+import '../engine/diagnostic_engine.dart';
 import '../main.dart';
 import '../models/test_profile.dart';
 import '../services/wellington_ble_service.dart';
+import '../state/bench_controller.dart';
+import '../widgets/identity_dialog.dart';
 import '../theme/app_theme.dart';
 import '../widgets/thermal_chart.dart';
 import 'asset_scanner_screen.dart';
 import 'test_report_screen.dart';
 
-/// Tela dedicada à leitura da memória flash interna SCS (páginas de 1024 B,
-/// cmd 5/1/3 + LZSS + CRC16) com geração direta de laudo diagnóstico.
+/// Tela de leitura da memória flash do sensor (protocolo SCS: páginas de
+/// 1024 B, cmd 5/1/3 + LZSS + CRC16) com geração de laudo. Para o técnico a
+/// tela mostra só etapas em texto simples e o botão Cancelar.
 class FlashLogScreen extends StatefulWidget {
   final String sensorId;
   final String sensorName;
@@ -27,11 +31,21 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
   bool _loading = true;
   String? _error;
   FlashDownloadResult? _download;
+  BenchController? _controller;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startDownload());
+  }
+
+  @override
+  void dispose() {
+    // Ao sair da tela, a busca de sensores volta (ela fica parada enquanto a
+    // memória flash é lida ou depois de uma falha).
+    final controller = _controller;
+    if (controller != null) Future.microtask(controller.resumeRadar);
+    super.dispose();
   }
 
   Future<void> _startDownload() async {
@@ -40,6 +54,7 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
       _error = null;
     });
     final controller = BenchScope.of(context);
+    _controller = controller;
     try {
       final res = await controller.downloadFlashForSensor(widget.sensorId);
       if (mounted) {
@@ -60,11 +75,13 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
 
   Future<void> _generateReportFromFlash() async {
     final download = _download;
-    if (download == null || download.readings.length < 2) {
+    final problem = download == null
+        ? 'Nenhum dado baixado do sensor.'
+        : DiagnosticEngine.insufficientPartialData(download.readings);
+    if (download == null || problem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'O sensor precisa ter pelo menos 2 leituras gravadas na memória flash para gerar o laudo.'),
+        SnackBar(
+          content: Text(problem ?? 'Nenhum dado baixado do sensor.'),
           backgroundColor: AppColors.warning,
         ),
       );
@@ -74,7 +91,6 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
     final controller = BenchScope.of(context);
     final serialCtrl = TextEditingController();
     final modelCtrl = TextEditingController();
-    final techCtrl = TextEditingController(text: controller.lastTechnicianName);
     final symptomCtrl = TextEditingController();
     TestProfile profile = TestProfile.defaultProfiles.first;
 
@@ -136,10 +152,22 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      TextField(
-                        controller: techCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Técnico responsável',
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.badge_outlined,
+                            color: AppColors.indigo),
+                        title: const Text('Técnico responsável',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 13.5)),
+                        subtitle: Text(controller.hasIdentity
+                            ? controller.technicianLabel
+                            : 'Não identificado'),
+                        trailing: TextButton(
+                          onPressed: () async {
+                            await showIdentityDialog(context, controller);
+                            setModalState(() {});
+                          },
+                          child: Text(controller.hasIdentity ? 'Trocar' : 'Informar'),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -147,7 +175,7 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
                         initialValue: profile,
                         isExpanded: true,
                         decoration:
-                            const InputDecoration(labelText: 'Perfil normativo'),
+                            const InputDecoration(labelText: 'Perfil de teste'),
                         items: TestProfile.defaultProfiles
                             .map((p) => DropdownMenuItem(
                                   value: p,
@@ -179,12 +207,12 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
                               onPressed: () {
                                 if (serialCtrl.text.trim().isEmpty ||
                                     modelCtrl.text.trim().isEmpty ||
-                                    techCtrl.text.trim().isEmpty) {
+                                    !controller.hasIdentity) {
                                   return;
                                 }
                                 Navigator.of(modalContext).pop(true);
                               },
-                              child: const Text('Gerar Laudo Oficial'),
+                              child: const Text('Gerar laudo'),
                             ),
                           ),
                         ],
@@ -199,13 +227,16 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
       },
     );
 
-    if (confirmed == true) {
+    final signed = confirmed == true &&
+        mounted &&
+        await confirmTechnicianPin(context, controller);
+    if (signed && mounted) {
       final result = await controller.createReportFromFlash(
         sensorId: widget.sensorId,
         sensorName: widget.sensorName,
         serialNumber: serialCtrl.text.trim(),
         modelName: modelCtrl.text.trim(),
-        technicianName: techCtrl.text.trim(),
+        technicianName: controller.technicianLabel,
         profile: profile,
         readings: download.readings,
         reportedSymptom: symptomCtrl.text.trim(),
@@ -218,7 +249,6 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
 
     serialCtrl.dispose();
     modelCtrl.dispose();
-    techCtrl.dispose();
     symptomCtrl.dispose();
   }
 
@@ -239,27 +269,46 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
       ),
       body: SafeArea(
         child: _loading
-            ? const Center(
+            ? Center(
                 child: Padding(
-                  padding: EdgeInsets.all(28),
+                  padding: const EdgeInsets.all(28),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
                       Text(
-                        'Conectando ao sensor Wellington MON1-001...',
+                        'Lendo a memória de ${widget.sensorName}',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontWeight: FontWeight.w800,
+                          fontSize: 16,
                           color: AppColors.ink,
                         ),
                       ),
-                      SizedBox(height: 6),
-                      Text(
-                        'Lendo relógio RTC, páginas de 1024 B (cmd 5/1/3) e decodificando frames LZSS + CRC16.',
+                      const SizedBox(height: 6),
+                      ValueListenableBuilder<String>(
+                        valueListenable: BenchScope.of(context).flashStage,
+                        builder: (context, stage, _) => Text(
+                          stage.isEmpty ? 'Preparando...' : stage,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: AppColors.slate, fontSize: 15),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Mantenha o celular perto do sensor.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: AppColors.slate, fontSize: 12.5),
+                        style: TextStyle(color: AppColors.slate, fontSize: 14),
+                      ),
+                      const SizedBox(height: 20),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await BenchScope.of(context).cancelFlashDownload();
+                          if (mounted) Navigator.of(this.context).pop();
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text('Cancelar leitura'),
                       ),
                     ],
                   ),
@@ -297,7 +346,7 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
                               FilledButton.icon(
                                 onPressed: _startDownload,
                                 icon: const Icon(Icons.refresh_rounded),
-                                label: const Text('Tentar Novamente'),
+                                label: const Text('Tentar novamente'),
                               ),
                             ],
                           ),

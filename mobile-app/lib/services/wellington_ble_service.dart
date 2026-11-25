@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/sensor_reading.dart';
 import 'scs_event_log_reader.dart';
@@ -133,6 +134,30 @@ class WellingtonBleService {
   BluetoothCharacteristic? _rxChar;
   bool _suspendWatchdog = false;
 
+  /// Quanto tempo a última temperatura lida continua valendo quando só chegam
+  /// pacotes de scan sem dados do fabricante.
+  static const Duration _advHold = Duration(seconds: 30);
+
+  /// Ouvintes criados em [connect]; cancelados em [disconnect] para o app não
+  /// continuar processando o sensor depois que a leitura termina ou falha.
+  final List<StreamSubscription<dynamic>> _connSubs = [];
+
+  /// Etapa atual da leitura da memória flash, em texto simples para o técnico.
+  final ValueNotifier<String> flashStage = ValueNotifier<String>('');
+
+  bool _flashCancelled = false;
+
+  /// Busca rápida (gasta mais bateria) só com ensaio rodando; senão, modo
+  /// econômico. Vale a partir da próxima vez que a busca (re)começar.
+  bool highFrequencyScan = false;
+
+  /// Cancela a leitura da memória flash em andamento: desconecta na hora e a
+  /// leitura termina com "Leitura cancelada".
+  Future<void> cancelFlashDownload() async {
+    _flashCancelled = true;
+    await disconnect();
+  }
+
   final _statusController = StreamController<Uint8List>.broadcast();
   final _eventBlockController = StreamController<Uint8List>.broadcast();
 
@@ -244,6 +269,63 @@ class WellingtonBleService {
     return (t >= -40 && t <= 60) ? t : null;
   }
 
+  /// Junta um pacote de anúncio ao último estado conhecido do sensor.
+  ///
+  /// O Monitor alterna dois pacotes: um com os dados do fabricante (0x578:
+  /// temperatura + nome do ativo, ex.: GEUB031229) e a resposta de scan (só o
+  /// serial B152E…). Regras:
+  /// - pacote do fabricante atualiza temperatura e nome (o nome do ativo, uma
+  ///   vez lido, nunca volta para o serial);
+  /// - resposta de scan só atualiza o sinal e mantém nome e temperatura;
+  /// - sem pacote do fabricante há mais de [_advHold], a temperatura vira null
+  ///   (nunca mostra valor velho como atual), mas o nome fica.
+  static LiveTelemetry mergeAdvertisement({
+    required String deviceId,
+    required LiveTelemetry? prev,
+    required List<int>? mfr,
+    required String scanName,
+    required int rssi,
+    required DateTime now,
+    required DateTime? lastMfrAt,
+  }) {
+    if (mfr != null) {
+      final tail = _asciiTail(mfr);
+      final name = tail.isNotEmpty
+          ? tail
+          : (prev?.assetName ?? (scanName.isEmpty ? deviceId : scanName));
+      return LiveTelemetry(
+        deviceId: deviceId,
+        at: now,
+        temperatureC: decodeAdvTemp(mfr) ?? prev?.temperatureC,
+        rssi: rssi,
+        assetName: name,
+        flagBytes: mfr.length >= 2 ? [mfr[0], mfr[1]] : List<int>.from(mfr),
+        rawHex: mfr.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+      );
+    }
+    if (prev == null) {
+      return LiveTelemetry(
+        deviceId: deviceId,
+        at: now,
+        temperatureC: null,
+        rssi: rssi,
+        assetName: scanName.isEmpty ? deviceId : scanName,
+        flagBytes: const [],
+        rawHex: '',
+      );
+    }
+    final fresh = lastMfrAt != null && now.difference(lastMfrAt) < _advHold;
+    return LiveTelemetry(
+      deviceId: deviceId,
+      at: prev.at,
+      temperatureC: fresh ? prev.temperatureC : null,
+      rssi: rssi,
+      assetName: prev.assetName,
+      flagBytes: prev.flagBytes,
+      rawHex: prev.rawHex,
+    );
+  }
+
   /// Janela de captura ao vivo (pull-down) quando o histórico interno está
   /// travado. Ajustável pela tela: quanto maior, mais pontos da curva.
   Duration liveCaptureWindow = const Duration(seconds: 20);
@@ -268,20 +350,25 @@ class WellingtonBleService {
           'permita o acesso em Ajustes > ISO Test.');
     }
     final latest = <String, LiveTelemetry>{};
+    // Último pacote do fabricante (0x578) visto de cada sensor.
+    final lastMfrAt = <String, DateTime>{};
     await FlutterBluePlus.startScan(
       continuousUpdates: true,
-      androidScanMode: AndroidScanMode.lowLatency,
+      androidScanMode: highFrequencyScan ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
       androidUsesFineLocation: false,
     );
-    final watchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
+    // Vigia religa a busca se o sistema parar (10 s: menos bateria que os 3 s anteriores).
+    final watchdog = Timer.periodic(const Duration(seconds: 10), (_) async {
       if (!_suspendWatchdog && !_isConnected && !FlutterBluePlus.isScanningNow) {
         try {
           await FlutterBluePlus.startScan(
             continuousUpdates: true,
-            androidScanMode: AndroidScanMode.lowLatency,
+            androidScanMode: highFrequencyScan ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
             androidUsesFineLocation: false,
           );
-        } catch (_) {}
+        } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
       }
     });
     try {
@@ -290,21 +377,17 @@ class WellingtonBleService {
           final w = r.advertisementData.manufacturerData[0x578];
           if (w == null && !_isWellingtonMonitor(r)) continue;
           final id = r.device.remoteId.str;
-          final tail = w != null ? _asciiTail(w) : '';
-          final name = tail.isNotEmpty ? tail : _nameOf(r);
-          latest[id] = LiveTelemetry(
+          final now = DateTime.now();
+          latest[id] = mergeAdvertisement(
             deviceId: id,
-            at: DateTime.now(),
-            temperatureC: w != null ? decodeAdvTemp(w) : null,
+            prev: latest[id],
+            mfr: w,
+            scanName: _nameOf(r),
             rssi: r.rssi,
-            assetName: name.isEmpty ? id : name,
-            flagBytes: w == null
-                ? const []
-                : (w.length >= 2 ? [w[0], w[1]] : List<int>.from(w)),
-            rawHex: w == null
-                ? ''
-                : w.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '),
+            now: now,
+            lastMfrAt: lastMfrAt[id],
           );
+          if (w != null) lastMfrAt[id] = now;
         }
         if (latest.isEmpty) continue;
         final list = latest.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
@@ -314,7 +397,9 @@ class WellingtonBleService {
       watchdog.cancel();
       try {
         await FlutterBluePlus.stopScan();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
     }
   }
 
@@ -374,7 +459,9 @@ class WellingtonBleService {
           androidScanMode: AndroidScanMode.lowLatency,
           androidUsesFineLocation: false,
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
     }
 
     final sub = FlutterBluePlus.scanResults.listen(handle);
@@ -391,7 +478,9 @@ class WellingtonBleService {
       await sub.cancel();
       try {
         await FlutterBluePlus.stopScan();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
     }
     return readings;
   }
@@ -417,7 +506,9 @@ class WellingtonBleService {
     _advSamples.remove(id);
     try {
       await _connectedDevice!.disconnect();
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
     try {
       await FlutterBluePlus.startScan(timeout: duration, androidUsesFineLocation: false);
       final sub = FlutterBluePlus.scanResults.listen((results) {
@@ -471,8 +562,10 @@ class WellingtonBleService {
 
   Future<bool> connect(String deviceId) async {
     final device = BluetoothDevice.fromId(deviceId);
-    await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+    // Guardado ANTES de conectar: se a conexão falhar no meio, [disconnect]
+    // ainda consegue encerrar tudo.
     _connectedDevice = device;
+    await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
     final services = await device.discoverServices();
 
@@ -521,7 +614,7 @@ class WellingtonBleService {
         if ((p.notify || p.indicate) && !isAssetTx) {
           try {
             await c.setNotifyValue(true);
-            c.onValueReceived.listen((v) => _log('NOTIF $s8/$c8', v));
+            _connSubs.add(c.onValueReceived.listen((v) => _log('NOTIF $s8/$c8', v)));
             _log('NOTIFY ON $s8/$c8');
           } catch (e) {
             _log('NOTIFY $s8/$c8 falhou: $e');
@@ -533,18 +626,18 @@ class WellingtonBleService {
     // Ativar notificação em ambas as características é tudo que o "handshake"
     // de autenticação exige para o Monitor — ver nota no topo do arquivo.
     _log('NOTIFY TX efdd2460 -> ${await _assetTrackTxChar!.setNotifyValue(true)}');
-    _assetTrackTxChar!.lastValueStream.listen((bytes) {
+    _connSubs.add(_assetTrackTxChar!.lastValueStream.listen((bytes) {
       if (bytes.isEmpty) return;
       _log('TX', bytes);
       _statusController.add(Uint8List.fromList(bytes));
-    });
+    }));
 
     _log('NOTIFY BULK ffdd2460 -> ${await _bulkTxChar!.setNotifyValue(true)}');
-    _bulkTxChar!.lastValueStream.listen((bytes) {
+    _connSubs.add(_bulkTxChar!.lastValueStream.listen((bytes) {
       if (bytes.isEmpty) return;
       _log('BULK', bytes);
       _eventBlockController.add(Uint8List.fromList(bytes));
-    });
+    }));
 
     _isConnected = true;
     return true;
@@ -660,16 +753,32 @@ class WellingtonBleService {
     final lines = <String>['Sensor alvo: $deviceId'];
 
     _suspendWatchdog = true;
+    _flashCancelled = false;
     try {
       await stopScan();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('flash: stopScan falhou: $e');
+    }
 
-    await connect(deviceId);
     try {
-      final sensorTs = await requestSensorTimestamp();
+      // Conexão DENTRO do try: se falhar ou estourar o tempo, o finally abaixo
+      // desconecta e para tudo (antes a conexão ficava aberta lendo o sensor).
+      flashStage.value = 'Conectando ao sensor...';
+      await connect(deviceId);
+      flashStage.value = 'Lendo o relógio do sensor...';
+      // Uma nova tentativa: no iPhone a primeira resposta às vezes se perde.
+      int sensorTs;
+      try {
+        sensorTs = await requestSensorTimestamp();
+      } on TimeoutException {
+        if (_flashCancelled) rethrow;
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        sensorTs = await requestSensorTimestamp();
+      }
       final offset = DateTime.now().millisecondsSinceEpoch ~/ 1000 - sensorTs;
       lines.add('Relógio RTC do sensor: $sensorTs s (offset ${offset}s)');
 
+      flashStage.value = 'Baixando o histórico de temperatura...';
       var fast = true;
       List<ScsEventBlock> blocks;
       try {
@@ -693,6 +802,7 @@ class WellingtonBleService {
           ? blocks.first.protocolVersion
           : assumedProtocolVersion;
 
+      flashStage.value = 'Organizando as leituras...';
       final readings = decodeStatsV2(
         blocks: blocks,
         sensorToUnixOffsetSecs: offset,
@@ -717,9 +827,17 @@ class WellingtonBleService {
         readings: readings,
         diagnosticLines: lines,
       );
+    } catch (e) {
+      if (_flashCancelled) throw Exception('Leitura cancelada.');
+      if (e is TimeoutException) {
+        throw Exception('O sensor não respondeu a tempo. A leitura foi encerrada. '
+            'Aproxime o celular do sensor e toque em Tentar novamente.');
+      }
+      rethrow;
     } finally {
       await disconnect();
       _suspendWatchdog = false;
+      flashStage.value = '';
     }
   }
 
@@ -845,7 +963,9 @@ class WellingtonBleService {
       for (final cmd in [scsRequestTimestamp, scsRequestStatus, scsRequestEventStartAddress]) {
         try {
           await _writeCommand(cmd);
-        } catch (_) {}
+        } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
         await Future.delayed(const Duration(milliseconds: 1500));
       }
       _log('FIM comandos: ${receivedBlocks.length} blocos BULK, nada decodificado');
@@ -941,7 +1061,9 @@ class WellingtonBleService {
           ));
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
 
     return results;
   }
@@ -964,9 +1086,23 @@ class WellingtonBleService {
   }
 
   Future<void> disconnect() async {
-    if (_connectedDevice != null) {
-      await _connectedDevice!.disconnect();
-      _connectedDevice = null;
+    // Para de ouvir o sensor primeiro: nada mais é lido depois daqui.
+    for (final s in _connSubs) {
+      try {
+        await s.cancel();
+      } catch (e) {
+        debugPrint('BLE: falha ignorada: $e');
+      }
+    }
+    _connSubs.clear();
+    final device = _connectedDevice;
+    _connectedDevice = null;
+    if (device != null) {
+      try {
+        await device.disconnect().timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // Já desconectado ou sem resposta: o app segue como desconectado.
+      }
     }
     _reqDataChar = null;
     _assetTrackTxChar = null;

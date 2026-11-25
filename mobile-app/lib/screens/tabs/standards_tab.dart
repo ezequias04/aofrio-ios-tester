@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../config/app_config.dart';
 import '../../main.dart';
 import '../../models/test_profile.dart';
-import '../../services/credential_store.dart';
-import '../../services/report_sync_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/identity_dialog.dart';
 
 class StandardsTab extends StatefulWidget {
   const StandardsTab({super.key});
@@ -14,75 +12,6 @@ class StandardsTab extends StatefulWidget {
 }
 
 class _StandardsTabState extends State<StandardsTab> {
-  bool _hasToken = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkToken();
-  }
-
-  Future<void> _checkToken() async {
-    final has = await ReportSyncService.hasToken();
-    if (mounted) setState(() => _hasToken = has);
-  }
-
-  Future<void> _editApiToken() async {
-    final existing = await CredentialStore.readApiToken();
-    if (!mounted) return;
-    final ctrl = TextEditingController(text: existing ?? '');
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Chave da Nuvem Cloudflare'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Informe a chave numérica/token para autenticar o envio de laudos para o portal ISO Test.',
-              style: TextStyle(fontSize: 13, color: AppColors.slate),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Token de autenticação',
-                prefixIcon: Icon(Icons.key_rounded),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Salvar'),
-          ),
-        ],
-      ),
-    );
-
-    if (saved == true) {
-      await CredentialStore.saveApiToken(ctrl.text);
-      await _checkToken();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Token atualizado neste aparelho.'),
-            backgroundColor: AppColors.approved,
-          ),
-        );
-      }
-    }
-    ctrl.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = BenchScope.of(context);
@@ -96,7 +25,7 @@ class _StandardsTabState extends State<StandardsTab> {
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
           children: [
             const _SectionHeader(
-              title: 'Perfis Normativos de Pull-Down',
+              title: 'Perfis de teste (pull-down em campo)',
               subtitle:
                   'Limites de aprovação, tempos máximos e travas anticongelamento adotadas no sistema.',
             ),
@@ -186,12 +115,32 @@ class _StandardsTabState extends State<StandardsTab> {
             const _SectionHeader(
               title: 'Configurações do Sistema',
               subtitle:
-                  'Portal em nuvem e simulador opcional de bancada.',
+                  'Simulador opcional de bancada.',
             ),
             const SizedBox(height: 10),
             Card(
               child: Column(
                 children: [
+                  ListTile(
+                    leading: const Icon(Icons.badge_outlined,
+                        color: AppColors.indigo),
+                    title: const Text(
+                      'Quem está testando',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      controller.hasIdentity
+                          ? controller.technicianLabel
+                          : 'Não identificado',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: TextButton(
+                      onPressed: () => showIdentityDialog(context, controller),
+                      child: Text(controller.hasIdentity ? 'Trocar' : 'Informar'),
+                    ),
+                  ),
+                  const Divider(height: 1),
                   SwitchListTile(
                     secondary: const Icon(Icons.science_rounded,
                         color: AppColors.amber),
@@ -206,26 +155,6 @@ class _StandardsTabState extends State<StandardsTab> {
                     ),
                     value: controller.demoModeEnabled,
                     onChanged: (v) => controller.toggleDemoMode(v),
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: Icon(
-                      _hasToken ? Icons.cloud_done_rounded : Icons.key_rounded,
-                      color: _hasToken ? AppColors.approved : AppColors.indigo,
-                    ),
-                    title: const Text(
-                      'Sincronização Portal Cloudflare',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-                    ),
-                    subtitle: Text(
-                      '${AppConfig.apiBaseUrl}\nStatus do token: ${_hasToken ? 'Autenticado' : 'Usar chave manual'}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    trailing: TextButton(
-                      onPressed: _editApiToken,
-                      child: const Text('Configurar'),
-                    ),
                   ),
                 ],
               ),

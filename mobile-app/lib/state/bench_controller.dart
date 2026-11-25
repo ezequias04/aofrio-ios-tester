@@ -11,7 +11,6 @@ import '../models/test_profile.dart';
 import '../models/test_result.dart';
 import '../services/active_sessions_store.dart';
 import '../services/local_report_store.dart';
-import '../services/report_sync_service.dart';
 import '../services/wellington_ble_service.dart';
 
 /// Controlador central do sistema ISO Test:
@@ -33,23 +32,45 @@ class BenchController extends ChangeNotifier {
   bool _initialized = false;
   bool _scanning = false;
   bool _isDownloadingFlash = false;
-  bool _isSyncingBatch = false;
   bool _demoModeEnabled = false;
   String? _bleError;
   String _lastTechnicianName = '';
+  String _technicianBadge = '';
+  String _technicianPin = '';
 
   bool get initialized => _initialized;
   bool get scanning => _scanning;
   bool get isDownloadingFlash => _isDownloadingFlash;
-  bool get isSyncingBatch => _isSyncingBatch;
   bool get demoModeEnabled => _demoModeEnabled;
   String? get bleError => _bleError;
   String get lastTechnicianName => _lastTechnicianName;
+  String get technicianBadge => _technicianBadge;
+
+  /// Quem está testando: nome e matrícula informados neste aparelho.
+  bool get hasIdentity =>
+      _lastTechnicianName.isNotEmpty && _technicianBadge.isNotEmpty && _technicianPin.isNotEmpty;
+
+  /// Confere o PIN de quem está identificado (assina ensaio e laudo).
+  bool checkPin(String pin) => _technicianPin.isNotEmpty && pin.trim() == _technicianPin;
+
+  /// Nome + matrícula: é o que vai gravado em todo ensaio e laudo.
+  String get technicianLabel => _technicianBadge.isEmpty
+      ? _lastTechnicianName
+      : '$_lastTechnicianName • Mat. $_technicianBadge';
+
+  Future<void> saveIdentity({required String name, required String badge, required String pin}) async {
+    _lastTechnicianName = name.trim();
+    _technicianBadge = badge.trim();
+    _technicianPin = pin.trim();
+    await ActiveSessionsStore.saveTechnicianPin(_technicianPin);
+    await ActiveSessionsStore.saveLastTechnician(_lastTechnicianName);
+    await ActiveSessionsStore.saveTechnicianBadge(_technicianBadge);
+    notifyListeners();
+  }
 
   List<BenchSession> get activeSessions => List.unmodifiable(_activeSessions);
   List<TestResult> get savedReports => List.unmodifiable(_savedReports);
 
-  int get unsyncedCount => _savedReports.where((r) => !r.synced).length;
 
   /// Lista combinada de sensores ativos (reais + simulados se modo demo ativo),
   /// ordenada por intensidade de sinal (RSSI).
@@ -87,6 +108,8 @@ class BenchController extends ChangeNotifier {
   Future<void> initialize() async {
     _activeSessions = await ActiveSessionsStore.loadSessions();
     _lastTechnicianName = await ActiveSessionsStore.loadLastTechnician();
+    _technicianBadge = await ActiveSessionsStore.loadTechnicianBadge();
+    _technicianPin = await ActiveSessionsStore.loadTechnicianPin();
     _demoModeEnabled = await ActiveSessionsStore.loadDemoMode();
     _savedReports = await LocalReportStore.getAll();
     _initialized = true;
@@ -99,6 +122,8 @@ class BenchController extends ChangeNotifier {
   }
 
   Future<void> _syncWakelock() async {
+    // Busca rápida de sensores só enquanto houver ensaio rodando (bateria).
+    _ble.highFrequencyScan = _activeSessions.isNotEmpty;
     try {
       if (_activeSessions.isNotEmpty) {
         await WakelockPlus.enable();
@@ -263,8 +288,6 @@ class BenchController extends ChangeNotifier {
     );
 
     _activeSessions.insert(0, session);
-    _lastTechnicianName = technicianName.trim();
-    await ActiveSessionsStore.saveLastTechnician(_lastTechnicianName);
     await ActiveSessionsStore.saveSessions(_activeSessions);
     await _syncWakelock();
     notifyListeners();
@@ -382,7 +405,6 @@ class BenchController extends ChangeNotifier {
     notifyListeners();
 
     // Tenta envio em segundo plano sem bloquear ou falhar se estiver offline.
-    unawaited(_autoSyncIfConfigured(result));
     return result;
   }
 
@@ -405,12 +427,45 @@ class BenchController extends ChangeNotifier {
 
     try {
       await _ensurePermissions();
-      return await _ble.downloadDecodedFlashHistory(sensorId);
-    } finally {
+      final result = await _ble.downloadDecodedFlashHistory(sensorId);
+      // Leitura concluída: volta a procurar os sensores.
       _isDownloadingFlash = false;
+      _resumeRadarAfterFlash = false;
       notifyListeners();
       unawaited(startRadar(restart: true));
+      return result;
+    } catch (_) {
+      // Falha ou tempo limite: a leitura PARA. O radar não religa sozinho
+      // (antes ele voltava a ler o sensor por trás da tela de erro). Volta
+      // quando o técnico sair da tela ou tocar em procurar de novo.
+      _isDownloadingFlash = false;
+      _scanning = false;
+      notifyListeners();
+      if (_resumeRadarAfterFlash) {
+        // O técnico saiu da tela (ou cancelou) durante a leitura.
+        _resumeRadarAfterFlash = false;
+        unawaited(startRadar(restart: true));
+      }
+      rethrow;
     }
+  }
+
+  bool _resumeRadarAfterFlash = false;
+
+  /// Etapa da leitura da memória flash (texto para a tela).
+  ValueListenable<String> get flashStage => _ble.flashStage;
+
+  /// Botão Cancelar da tela de memória flash.
+  Future<void> cancelFlashDownload() => _ble.cancelFlashDownload();
+
+  /// Retoma a busca de sensores (chamado ao sair da tela de memória flash).
+  void resumeRadar() {
+    if (_isDownloadingFlash) {
+      // Ainda terminando a leitura: religa assim que ela acabar.
+      _resumeRadarAfterFlash = true;
+      return;
+    }
+    unawaited(startRadar());
   }
 
   Future<TestResult> createReportFromFlash({
@@ -437,43 +492,11 @@ class BenchController extends ChangeNotifier {
       allowPartial: true,
     );
 
-    _lastTechnicianName = technicianName.trim();
-    await ActiveSessionsStore.saveLastTechnician(_lastTechnicianName);
     await LocalReportStore.save(result, synced: false);
     _savedReports = await LocalReportStore.getAll();
     notifyListeners();
 
-    unawaited(_autoSyncIfConfigured(result));
     return result;
-  }
-
-  Future<void> _autoSyncIfConfigured(TestResult result) async {
-    if (!await ReportSyncService.hasToken()) return;
-    final outcome = await ReportSyncService.syncReport(result);
-    if (outcome.success) {
-      _savedReports = await LocalReportStore.getAll();
-      notifyListeners();
-    }
-  }
-
-  Future<SyncOutcome> syncSingleReport(TestResult result) async {
-    final outcome = await ReportSyncService.syncReport(result);
-    _savedReports = await LocalReportStore.getAll();
-    notifyListeners();
-    return outcome;
-  }
-
-  Future<BatchSyncOutcome> syncAllPendingReports() async {
-    _isSyncingBatch = true;
-    notifyListeners();
-    try {
-      final outcome = await ReportSyncService.syncAllPending();
-      _savedReports = await LocalReportStore.getAll();
-      return outcome;
-    } finally {
-      _isSyncingBatch = false;
-      notifyListeners();
-    }
   }
 
   Future<void> deleteReport(String testId) async {

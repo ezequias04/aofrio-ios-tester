@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../engine/diagnostic_engine.dart';
 import '../main.dart';
 import '../models/bench_session.dart';
 import '../models/diagnostic_finding.dart';
@@ -174,11 +175,11 @@ class _DiagnosticLiveScreenState extends State<DiagnosticLiveScreen> {
 
   Future<void> _finishAndGenerateReport(BenchSession session) async {
     final controller = BenchScope.of(context);
-    if (session.readings.length < 2) {
+    final problem = DiagnosticEngine.insufficientPartialData(session.readings);
+    if (problem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'Aguarde pelo menos 2 leituras do sensor para encerrar e gerar o laudo.'),
+        SnackBar(
+          content: Text('$problem Aguarde mais leituras ou descarte o ensaio.'),
           backgroundColor: AppColors.warning,
         ),
       );

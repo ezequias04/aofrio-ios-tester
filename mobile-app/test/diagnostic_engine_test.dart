@@ -178,4 +178,25 @@ void main() {
     expect(restoredResult.probableCauses, ['Relé colado']);
     expect(restoredResult.synced, isTrue);
   });
+  test('laudo parcial exige 8 leituras e 20 min de registro', () {
+    final t0 = DateTime(2026, 11, 20, 10, 0);
+    List<SensorReading> serie(int n, int passoMin) => List.generate(
+          n,
+          (m) => SensorReading(timestamp: t0.add(Duration(minutes: m * passoMin)), temperature: 26.0 - m * 0.3),
+        );
+    expect(DiagnosticEngine.insufficientPartialData(serie(2, 30)), isNotNull);
+    expect(DiagnosticEngine.insufficientPartialData(serie(10, 1)), isNotNull);
+    expect(DiagnosticEngine.insufficientPartialData(serie(10, 3)), isNull);
+    expect(
+      () => DiagnosticEngine.diagnose(
+        serialNumber: 'BR-009',
+        modelName: 'X',
+        technicianName: 'Pereira • Mat. 1',
+        profile: cocaProfile,
+        readings: serie(2, 30),
+        allowPartial: true,
+      ),
+      throwsArgumentError,
+    );
+  });
 }

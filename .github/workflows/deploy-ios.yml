@@ -59,6 +59,12 @@ jobs:
           cd mobile-app
           flutter pub get
 
+      - name: Analyze & test (nenhum app vai ao TestFlight com erro)
+        run: |
+          cd mobile-app
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test
+
       - name: Build iOS IPA
         run: |
           cd mobile-app

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/test_profile.dart';
 import '../services/wellington_ble_service.dart';
+import '../state/bench_controller.dart';
 import '../theme/app_theme.dart';
+import '../widgets/identity_dialog.dart';
 import 'asset_scanner_screen.dart';
 import 'diagnostic_live_screen.dart';
 
@@ -28,19 +30,10 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
   final _formKey = GlobalKey<FormState>();
   final _serialCtrl = TextEditingController();
   final _modelCtrl = TextEditingController();
-  final _techCtrl = TextEditingController();
   final _symptomCtrl = TextEditingController();
 
   TestProfile _selectedProfile = TestProfile.defaultProfiles.first;
   bool _starting = false;
-
-  static const _commonModels = [
-    'VB43',
-    'VN28',
-    'GDM-26',
-    'Cervejeira 400L',
-    'Freezer Horizontal',
-  ];
 
   static const _commonSymptoms = [
     'Não gela / temperatura alta',
@@ -57,20 +50,12 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
     if (_selectedSensorId != null) {
       _step = 1;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final ctrl = BenchScope.of(context);
-      if (ctrl.lastTechnicianName.isNotEmpty && _techCtrl.text.isEmpty) {
-        _techCtrl.text = ctrl.lastTechnicianName;
-      }
-    });
   }
 
   @override
   void dispose() {
     _serialCtrl.dispose();
     _modelCtrl.dispose();
-    _techCtrl.dispose();
     _symptomCtrl.dispose();
     super.dispose();
   }
@@ -112,16 +97,12 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
 
   Future<void> _startDiagnostic() async {
     final controller = BenchScope.of(context);
-    final tech = _techCtrl.text.trim();
-    if (tech.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Informe o técnico responsável pelo ensaio.'),
-          backgroundColor: AppColors.warning,
-        ),
-      );
-      return;
+    if (!controller.hasIdentity) {
+      final ok = await showIdentityDialog(context, controller, required: true);
+      if (!ok || !mounted) return;
     }
+    if (!await confirmTechnicianPin(context, controller) || !mounted) return;
+    final tech = controller.technicianLabel;
 
     final LiveTelemetry? sensor =
         _selectedSensorId == null ? null : controller.telemetryForSensor(_selectedSensorId!);
@@ -261,7 +242,7 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
   Widget _buildStepBody(
     List<LiveTelemetry> sensors,
     LiveTelemetry? selectedSensor,
-    dynamic controller,
+    BenchController controller,
   ) {
     if (_step == 0) {
       return Column(
@@ -462,24 +443,12 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
               textInputAction: TextInputAction.done,
               decoration: const InputDecoration(
                 labelText: 'Modelo do refrigerador',
-                hintText: 'Ex.: VB43, VN28, Cervejeira 400L',
                 prefixIcon: Icon(Icons.kitchen_outlined),
               ),
             ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: _commonModels.map((m) {
-                return ActionChip(
-                  label: Text(m),
-                  onPressed: () => setState(() => _modelCtrl.text = m),
-                );
-              }).toList(),
-            ),
             const SizedBox(height: 18),
             const Text(
-              'Perfil Normativo de Ensaio',
+              'Perfil de teste',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 14,
@@ -561,12 +530,24 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
           ),
         ),
         const SizedBox(height: 14),
-        TextField(
-          controller: _techCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Técnico responsável',
-            hintText: 'Nome do inspetor ou técnico',
-            prefixIcon: Icon(Icons.badge_outlined),
+        Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            leading: const Icon(Icons.badge_outlined, color: AppColors.indigo),
+            title: const Text(
+              'Técnico responsável pelo ensaio',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
+            ),
+            subtitle: Text(
+              controller.hasIdentity ? controller.technicianLabel : 'Não identificado',
+            ),
+            trailing: TextButton(
+              onPressed: () async {
+                await showIdentityDialog(context, controller);
+                if (mounted) setState(() {});
+              },
+              child: Text(controller.hasIdentity ? 'Trocar' : 'Informar'),
+            ),
           ),
         ),
         const SizedBox(height: 14),

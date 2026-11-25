@@ -87,18 +87,18 @@ class _SensorsTabState extends State<SensorsTab> {
                           controller.demoModeEnabled
                               ? 'Simulação ativa (${sensors.length} sensores)'
                               : (controller.scanning
-                                  ? '${sensors.length} sensor(es) Wellington/AoFrio ao alcance'
-                                  : 'Radar BLE aguardando ativação'),
+                                  ? '${sensors.length} sensor(es) por perto'
+                                  : 'Busca de sensores parada'),
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 13.5,
+                            fontSize: 16,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
                         const SizedBox(height: 2),
                         const Text(
-                          'Selecione manualmente qual sensor irá monitorar cada geladeira.',
-                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                          'Toque em Testar no sensor da geladeira.',
+                          style: TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
                         ),
                       ],
                     ),
@@ -344,11 +344,12 @@ class _SensorTileCard extends StatelessWidget {
                           ],
                         ),
                         Text(
-                          'ID: ${sensor.deviceId} • ${sensor.rssi} dBm • ${stale ? 'há ${age.inSeconds}s' : 'ao vivo'}',
+                          // Sem o identificador técnico (UUID): só o que o técnico usa.
+                          'Sinal ${sensor.rssi >= -65 ? 'forte' : (sensor.rssi >= -80 ? 'médio' : 'fraco')} • ${stale ? 'atualizado há ${age.inSeconds}s' : 'ao vivo'}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              color: AppColors.muted, fontSize: 11.5),
+                              color: AppColors.slate, fontSize: 13.5),
                         ),
                       ],
                     ),
@@ -358,9 +359,9 @@ class _SensorTileCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        temp == null ? '—' : '${temp.toStringAsFixed(1)}°C',
+                        temp == null ? 'aguardando' : '${temp.toStringAsFixed(1)}°C',
                         style: TextStyle(
-                          fontSize: 24,
+                          fontSize: temp == null ? 14 : 24,
                           fontWeight: FontWeight.w900,
                           color: tempColor,
                           fontFeatures: const [FontFeature.tabularFigures()],
@@ -403,8 +404,10 @@ class _SensorTileCard extends StatelessWidget {
                       ),
                       label: Text(
                         linkedSerial != null
-                            ? 'Ver Ensaio'
-                            : 'Vincular e Testar',
+                            ? 'Ver ensaio'
+                            : 'Testar',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ),
@@ -414,7 +417,7 @@ class _SensorTileCard extends StatelessWidget {
                       child: OutlinedButton.icon(
                         onPressed: onReadFlash,
                         icon: const Icon(Icons.memory_rounded, size: 18),
-                        label: const Text('Memória Flash'),
+                        label: const Text('Memória', maxLines: 1, overflow: TextOverflow.ellipsis),
                       ),
                     ),
                   ],

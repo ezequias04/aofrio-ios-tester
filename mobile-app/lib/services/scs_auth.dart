@@ -227,6 +227,9 @@ Future<ScsAuthResult> performScsAuthentication({
   bool isIos = false,
   Duration stepDelay = const Duration(milliseconds: 250),
 }) async {
+  /// Espera a resposta do sensor. O app oficial lê uma vez após 250 ms; aqui
+  /// repetimos a leitura (até ~3 s) até chegar um pacote cujo primeiro byte é o
+  /// comando esperado, para não aceitar a resposta velha do passo anterior.
   Future<Uint8List> waitResp(int expectedFirstByte) async {
     Completer<Uint8List>? notifCompleter;
     StreamSubscription<Uint8List>? sub;
@@ -241,17 +244,17 @@ Future<ScsAuthResult> performScsAuthentication({
       });
     }
     try {
-      await Future<void>.delayed(stepDelay);
-      if (notifCompleter != null && notifCompleter.isCompleted) {
-        return await notifCompleter.future;
+      Uint8List last = Uint8List(0);
+      for (var attempt = 0; attempt < 12; attempt++) {
+        await Future<void>.delayed(stepDelay);
+        if (notifCompleter != null && notifCompleter.isCompleted) {
+          return await notifCompleter.future;
+        }
+        last = await readAuthResponse();
+        if (last.isNotEmpty && last[0] == expectedFirstByte) return last;
+        if (stepDelay == Duration.zero) break; // testes: sem repetição
       }
-      final readBytes = await readAuthResponse();
-      if (readBytes.isNotEmpty) return readBytes;
-      if (notifCompleter != null) {
-        return await notifCompleter.future
-            .timeout(const Duration(seconds: 2));
-      }
-      return readBytes;
+      return last;
     } finally {
       await sub?.cancel();
     }
@@ -323,9 +326,10 @@ Future<ScsAuthResult> performScsAuthentication({
   if ((protocolVersion >= 12 || hashType == 2) && step2.length >= pos + 2) {
     final prodRaw = bd2.getUint16(pos, Endian.little);
     pos += 2;
-    // Globals.convertProductIdAndRevision: byte baixo = productId, byte alto = revision
-    productId = prodRaw & 0xFF;
-    productRevision = (prodRaw >> 8) & 0xFF;
+    // Globals: PRODUCT_ID_AND_REV_SCS_MONITOR = 4097 = 0x1001
+    //   -> byte ALTO = productId (0x10 = 16 = Monitor), byte baixo = revisão.
+    productId = (prodRaw >> 8) & 0xFF;
+    productRevision = prodRaw & 0xFF;
   }
 
   int betaVersion = 0;
@@ -351,7 +355,9 @@ Future<ScsAuthResult> performScsAuthentication({
 
   // Passo opcional DH (quando isTypeTwoOrThreeConnection || extraFlag)
   var sessionCipher = calc.cipher;
-  final needKeyExchange = calc.isTypeTwoOrThree || extraFlag;
+  // Original: isTypeTwoOrThreeConnection && flag. Para o Monitor (hash tipo 2)
+  // isTypeTwoOrThreeConnection é sempre falso -> sem troca de chaves.
+  final needKeyExchange = calc.isTypeTwoOrThree && extraFlag;
   if (needKeyExchange && sessionCipher != null) {
     const prime = 2147483647;
     const generator = 5;

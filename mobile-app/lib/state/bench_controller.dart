@@ -120,6 +120,10 @@ class BenchController extends ChangeNotifier {
     if (_demoModeEnabled) {
       _startDemoTicker();
     }
+    // Confere a cada 20 s mesmo sem telemetria (prazo vencido, app reaberto).
+    _autoStopTimer?.cancel();
+    _autoStopTimer = Timer.periodic(const Duration(seconds: 20), (_) => _autoStopCheck());
+    _autoStopCheck();
     notifyListeners();
     unawaited(startRadar());
   }
@@ -238,6 +242,7 @@ class BenchController extends ChangeNotifier {
     if (shouldPersist) {
       unawaited(ActiveSessionsStore.saveSessions(_activeSessions));
     }
+    _autoStopCheck();
     notifyListeners();
   }
 
@@ -418,6 +423,79 @@ class BenchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Parada automática do ensaio ──────────────────────────────────────────
+
+  /// Depois de atingir a meta, o ensaio continua por este tempo para confirmar
+  /// que a temperatura se mantém, e então é encerrado e o laudo é gerado.
+  static const Duration autoStopHold = Duration(minutes: 5);
+
+  /// Mínimo de leituras para o laudo automático (o motor exige 5).
+  static const int _autoStopMinReadings = 5;
+
+  final Set<String> _autoStopBusy = {};
+  final Set<String> _autoStopGaveUp = {};
+  final Map<String, TestResult> _autoReports = {};
+  Timer? _autoStopTimer;
+
+  /// Laudo gerado automaticamente para a sessão [sessionId], se houver.
+  TestResult? autoReportFor(String sessionId) => _autoReports[sessionId];
+
+  /// Motivo pelo qual a sessão [s] deve parar agora, ou null se segue rodando.
+  /// Regras: (1) caiu abaixo do limite de segurança de congelamento;
+  /// (2) meta atingida e mantida por [autoStopHold]; (3) tempo máximo do perfil.
+  static String? autoStopReasonFor(BenchSession s, DateTime now) {
+    if (s.readings.length < _autoStopMinReadings) return null;
+    final profile = s.profile;
+
+    var minTemp = s.readings.first.temperature;
+    for (final r in s.readings) {
+      if (r.temperature < minTemp) minTemp = r.temperature;
+    }
+    final safety = profile.safetyMinTemperature;
+    if (safety != null && minTemp < safety - 0.5) {
+      return 'temperatura abaixo do limite de segurança '
+          '(${minTemp.toStringAsFixed(1)}°C)';
+    }
+
+    final reachedAt = s.targetReachedAt;
+    if (reachedAt != null && now.difference(reachedAt) >= autoStopHold) {
+      return 'meta de ${profile.targetTemperature.toStringAsFixed(1)}°C '
+          'atingida e mantida por ${autoStopHold.inMinutes} min';
+    }
+
+    final maxMin = profile.calculateMaxAllowedMinutes(s.readings.first.temperature);
+    if (s.elapsed(now).inMinutes >= maxMin) {
+      return 'tempo máximo do perfil ($maxMin min) esgotado';
+    }
+    return null;
+  }
+
+  void _autoStopCheck() {
+    final now = DateTime.now();
+    for (final s in List<BenchSession>.of(_activeSessions)) {
+      if (_autoStopBusy.contains(s.id) || _autoStopGaveUp.contains(s.id)) continue;
+      final reason = autoStopReasonFor(s, now);
+      if (reason == null) continue;
+      _autoStopBusy.add(s.id);
+      unawaited(_autoFinalize(s.id, reason));
+    }
+  }
+
+  Future<void> _autoFinalize(String sessionId, String reason) async {
+    try {
+      await addNote(sessionId, 'Ensaio encerrado automaticamente: $reason.');
+      final result = await finalizeSession(sessionId, allowPartial: false);
+      _autoReports[sessionId] = result;
+      notifyListeners();
+    } catch (e) {
+      // Sem dados suficientes etc.: não tenta de novo; o técnico encerra à mão.
+      _autoStopGaveUp.add(sessionId);
+      debugPrint('Parada automática falhou: $e');
+    } finally {
+      _autoStopBusy.remove(sessionId);
+    }
+  }
+
   Future<FlashDownloadResult> downloadFlashForSensor(String sensorId) async {
     _isDownloadingFlash = true;
     notifyListeners();
@@ -457,6 +535,10 @@ class BenchController extends ChangeNotifier {
 
   /// Etapa da leitura da memória flash (texto para a tela).
   ValueListenable<String> get flashStage => _ble.flashStage;
+
+  /// Registro bruto da última conversa BLE com o sensor (comandos e respostas
+  /// em hexadecimal). Mostrado na tela de falha para diagnóstico.
+  List<String> get flashDebugLog => List.unmodifiable(_ble.rawLog);
 
   /// Botão Cancelar da tela de memória flash.
   Future<void> cancelFlashDownload() => _ble.cancelFlashDownload();
@@ -627,12 +709,14 @@ class BenchController extends ChangeNotifier {
     if (shouldPersist) {
       unawaited(ActiveSessionsStore.saveSessions(_activeSessions));
     }
+    _autoStopCheck();
     notifyListeners();
   }
 
   @override
   void dispose() {
     _demoTimer?.cancel();
+    _autoStopTimer?.cancel();
     unawaited(_radarSub?.cancel());
     unawaited(_ble.stopScan());
     unawaited(_ble.disconnect());

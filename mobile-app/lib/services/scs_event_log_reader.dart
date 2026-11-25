@@ -134,8 +134,16 @@ class ScsEventLogReader {
     this.windowsNative = false,
     this.timeout = const Duration(seconds: 3),
   }) {
-    _txSub = tx.listen(_tx.add);
-    _bulkSub = bulk.listen(_bulk.add);
+    // Os pedaços de dados podem chegar por TX ou por BULK dependendo do
+    // firmware: tudo vai para a mesma caixa e o filtro por endereço decide.
+    _txSub = tx.listen((b) {
+      _tx.add(b);
+      _bulk.add(b);
+    });
+    _bulkSub = bulk.listen((b) {
+      _bulk.add(b);
+      _tx.add(b);
+    });
   }
 
   final BleWrite writeReqData;

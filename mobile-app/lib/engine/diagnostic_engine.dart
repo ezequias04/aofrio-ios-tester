@@ -156,7 +156,7 @@ class DiagnosticEngine {
       headline =
           'Setpoint ${profile.targetTemperature.toStringAsFixed(1)}°C atingido aos ${targetReachedMinutes ?? elapsedMin.round()} min';
       subtext =
-          'Sistema atingiu a meta do perfil. Você já pode encerrar e gerar o laudo.';
+          'Meta atingida. O app encerra sozinho após 5 min estável e gera o laudo; você também pode encerrar agora.';
     } else if (dropAt15 != null && dropAt15 < profile.minInitialDrop15) {
       phase = DiagnosticPhase.verificandoPartida;
       health = LiveHealth.critico;

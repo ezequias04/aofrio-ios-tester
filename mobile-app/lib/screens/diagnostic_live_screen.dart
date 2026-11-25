@@ -21,6 +21,7 @@ class _DiagnosticLiveScreenState extends State<DiagnosticLiveScreen> {
   Timer? _tickTimer;
   bool _finishing = false;
   bool _mergingFlash = false;
+  bool _openedAutoReport = false;
 
   @override
   void initState() {
@@ -212,6 +213,20 @@ class _DiagnosticLiveScreenState extends State<DiagnosticLiveScreen> {
     final session = controller.sessionById(widget.sessionId);
 
     if (session == null) {
+      // Encerrado sozinho pelo app (meta atingida, prazo ou segurança): abre o laudo.
+      final auto = controller.autoReportFor(widget.sessionId);
+      if (auto != null) {
+        if (!_openedAutoReport) {
+          _openedAutoReport = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (_) => TestReportScreen(result: auto)),
+            );
+          });
+        }
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      }
       return Scaffold(
         appBar: AppBar(title: const Text('Ensaio')),
         body: Center(

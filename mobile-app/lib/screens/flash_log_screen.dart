@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../engine/diagnostic_engine.dart';
 import '../main.dart';
 import '../models/test_profile.dart';
@@ -347,6 +348,25 @@ class _FlashLogScreenState extends State<FlashLogScreen> {
                                 onPressed: _startDownload,
                                 icon: const Icon(Icons.refresh_rounded),
                                 label: const Text('Tentar novamente'),
+                              ),
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: () async {
+                                  final log = BenchScope.of(context)
+                                      .flashDebugLog
+                                      .join('\n');
+                                  await Clipboard.setData(ClipboardData(
+                                    text: 'ERRO: $_error\n\n$log',
+                                  ));
+                                  if (!mounted) return;
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(const SnackBar(
+                                    content: Text(
+                                        'Diagnóstico copiado. Envie para o suporte.'),
+                                  ));
+                                },
+                                icon: const Icon(Icons.copy_rounded),
+                                label: const Text('Copiar diagnóstico'),
                               ),
                             ],
                           ),

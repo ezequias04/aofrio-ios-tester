@@ -33,7 +33,7 @@ void main() {
       0x07, 0x00, // controllerCodeRevision = 7
       0x00, 0x00, // otaCodeRevision = 0
       0x00, 0x00, // highSideCodeRevision = 0
-      0x10, 0x01, // productId = 16 (Monitor), rev = 1
+      0x01, 0x10, // 0x1001 = Monitor (byte alto = productId 16, baixo = rev 1)
       0x06, 0x00, // subRev = 6, beta = 0
       0x01,       // hardwareId = 1
       0x00,       // extraFlag = 0 (sem DH extra)

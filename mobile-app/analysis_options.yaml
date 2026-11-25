@@ -3,6 +3,9 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - build/**
+    - android/**
+    - ios/**
+    - web/**
   errors:
     # Erros silenciados no código passam a ser aviso visível na análise.
     empty_catches: warning

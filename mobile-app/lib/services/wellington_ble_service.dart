@@ -293,6 +293,9 @@ class WellingtonBleService {
     required DateTime now,
     required DateTime? lastMfrAt,
   }) {
+    // Média móvel do sinal: o RSSI cru oscila 10-20 dB entre pacotes e fazia a
+    // lista pular e sensores "sumirem" por longe.
+    rssi = prev == null ? rssi : ((prev.rssi * 3 + rssi) / 4).round();
     if (mfr != null) {
       final tail = _asciiTail(mfr);
       final name = tail.isNotEmpty

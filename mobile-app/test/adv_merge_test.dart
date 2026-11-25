@@ -52,4 +52,18 @@ void main() {
     expect(b.assetName, 'GEUB031229');
     expect(b.temperatureC, closeTo(25.0, 0.001));
   });
+
+  test('sinal é suavizado: um pico fraco não derruba o RSSI', () {
+    final a = merge(null, mfr(26.7, 'GEUB031229'), t0, null); // -60
+    final b = WellingtonBleService.mergeAdvertisement(
+      deviceId: id,
+      prev: a,
+      mfr: null,
+      scanName: serial,
+      rssi: -100,
+      now: t0.add(const Duration(seconds: 1)),
+      lastMfrAt: t0,
+    );
+    expect(b.rssi, -70);
+  });
 }

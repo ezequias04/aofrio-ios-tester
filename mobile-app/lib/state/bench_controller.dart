@@ -73,14 +73,17 @@ class BenchController extends ChangeNotifier {
 
 
   /// Lista combinada de sensores ativos (reais + simulados se modo demo ativo),
-  /// ordenada por intensidade de sinal (RSSI).
+  /// em ordem fixa (nome do ativo): ordenar por sinal fazia a lista pular.
   List<LiveTelemetry> get discoveredSensors {
     final map = <String, LiveTelemetry>{..._realSensors};
     if (_demoModeEnabled) {
       map.addAll(_demoSensors);
     }
     final list = map.values.toList()
-      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+      ..sort((a, b) {
+        final c = a.assetName.compareTo(b.assetName);
+        return c != 0 ? c : a.deviceId.compareTo(b.deviceId);
+      });
     return list;
   }
 

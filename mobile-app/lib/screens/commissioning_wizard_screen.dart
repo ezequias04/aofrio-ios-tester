@@ -239,12 +239,23 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
     );
   }
 
+  static const int _nearRssi = -85;
+
   Widget _buildStepBody(
     List<LiveTelemetry> sensors,
     LiveTelemetry? selectedSensor,
     BenchController controller,
   ) {
     if (_step == 0) {
+      // Só sensores com sinal utilizável (ou já escolhidos/em uso): os de
+      // -90 dBm ficam a dezenas de metros e poluíam a lista.
+      final nearby = sensors
+          .where((s) =>
+              s.rssi >= _nearRssi ||
+              s.deviceId == _selectedSensorId ||
+              s.deviceId.startsWith('SIM-'))
+          .toList();
+      final hiddenFar = sensors.length - nearby.length;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -294,7 +305,7 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
             ),
           ],
           const SizedBox(height: 14),
-          if (sensors.isEmpty)
+          if (nearby.isEmpty)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -327,7 +338,7 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
               ),
             )
           else
-            ...sensors.map((s) {
+            ...nearby.map((s) {
               final inUse = controller.activeSessionForSensor(s.deviceId);
               final isSelected = _selectedSensorId == s.deviceId;
               final isSim = s.deviceId.startsWith('SIM-');
@@ -391,6 +402,14 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
                 ),
               );
             }),
+          if (hiddenFar > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '$hiddenFar sensor(es) distante(s) oculto(s). Aproxime o telefone do sensor da geladeira.',
+                style: const TextStyle(fontSize: 12.5, color: AppColors.slate),
+              ),
+            ),
         ],
       );
     }

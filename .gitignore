@@ -1,0 +1,13 @@
+
+.tooling/
+*.ipa
+*.apk
+*.exe
+*.log
+3.0.0
+readings)
+check_*.ps1
+download_*.ps1
+get_*.ps1
+monitor_run.ps1
+backend-api/src/database.json

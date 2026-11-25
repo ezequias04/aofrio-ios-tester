@@ -75,14 +75,19 @@ class StartAddressResponse {
   const StartAddressResponse(this.startAddress, this.count, this.blockSize);
 }
 
-/// Resposta do cmd 5: [5, startAddress u16, count u16, blockSize u16].
+/// Resposta do cmd 5: [5, startAddress u16, count u16, (opcional) blockSize u16].
+/// Em dispositivos que não reportam blockSize (ex.: SCS com pv < 30), a resposta
+/// tem apenas 5 bytes ([5, startAddress u16, count u16]) e blockSize padrão é 1024.
 StartAddressResponse? parseStartAddressResponse(Uint8List n) {
-  if (n.length < 7 || n[0] != kCmdEventStartAddress) return null;
+  if (n.length < 5 || n[0] != kCmdEventStartAddress) return null;
   final bd = ByteData.sublistView(n);
+  final startAddr = bd.getUint16(1, Endian.little);
+  final count = bd.getUint16(3, Endian.little);
+  final blockSize = n.length >= 7 ? bd.getUint16(5, Endian.little) : 1024;
   return StartAddressResponse(
-    bd.getUint16(1, Endian.little),
-    bd.getUint16(3, Endian.little),
-    bd.getUint16(5, Endian.little),
+    startAddr,
+    count,
+    blockSize == 0 ? 1024 : blockSize,
   );
 }
 
@@ -160,32 +165,59 @@ class ScsEventLogReader {
     if (start.count == 0) return const [];
 
     final blockSize = start.blockSize == 0 ? 1024 : start.blockSize;
-    final blocks = <ScsEventBlock>[];
+    final candidateAddrs = <int>[];
+    final headers = <int, Uint8List>{};
+    final rawTimestamps = <int, int>{};
+    final statuses = <int, int>{};
+
+    // Passo 1 (idêntico a STATE_READ_EVENT_HEADER _-87 do original):
+    // lê primeiro os cabeçalhos de 16 bytes de todos os blocos pelo canal TX.
     for (var i = 0; i < start.count; i++) {
       final addr = start.startAddress + i * blockSize;
       final header = await _readRange(addr, kChunkSize, fast: false);
       final hdr = ByteData.sublistView(header);
       final status = hdr.getUint16(4, Endian.little);
       final rawTs = hdr.getUint32(0, Endian.little);
-      // Mesmo filtro do original: descarta vazio/inválido.
       if (rawTs == _kInvalidTimestamp || !_isUsefulStatus(status)) continue;
+      candidateAddrs.add(addr);
+      headers[addr] = header;
+      rawTimestamps[addr] = rawTs;
+      statuses[addr] = status;
+    }
 
-      final rest = await _readRange(addr + kChunkSize, blockSize - kChunkSize,
-          fast: fastRead);
-      // Verificação: se o cabeçalho mudou durante a leitura, o bloco é descartado.
-      final again = await _readRange(addr, kChunkSize, fast: false);
-      if (ByteData.sublistView(again).getUint32(0, Endian.little) != rawTs) {
-        continue;
+    if (candidateAddrs.isEmpty) return const [];
+
+    // Ordena por rawTimestamp, depois por status, como `eventBlocks.sortOn`
+    candidateAddrs.sort((a, b) {
+      final c = rawTimestamps[a]!.compareTo(rawTimestamps[b]!);
+      return c != 0 ? c : statuses[a]!.compareTo(statuses[b]!);
+    });
+
+    // Passo 2 (idêntico a STATE_READ_EVENT_DATA _-CC do original):
+    // lê o corpo (blockSize - 16 B) de cada bloco válido; só re-verifica o
+    // cabeçalho no último bloco quando todos os `start.count` blocos são válidos.
+    final blocks = <ScsEventBlock>[];
+    final verifyLast = candidateAddrs.length == start.count;
+    for (var idx = 0; idx < candidateAddrs.length; idx++) {
+      final addr = candidateAddrs[idx];
+      final header = headers[addr]!;
+      final rawTs = rawTimestamps[addr]!;
+      final rest = await _readRange(
+        addr + kChunkSize,
+        blockSize - kChunkSize,
+        fast: fastRead,
+      );
+      if (verifyLast && idx == candidateAddrs.length - 1) {
+        final again = await _readRange(addr, kChunkSize, fast: false);
+        if (ByteData.sublistView(again).getUint32(0, Endian.little) != rawTs) {
+          continue;
+        }
       }
       final page = Uint8List(blockSize)
         ..setRange(0, kChunkSize, header)
         ..setRange(kChunkSize, blockSize, rest);
       blocks.add(ScsEventBlock.fromPage(addr, page));
     }
-    blocks.sort((a, b) {
-      final c = a.rawTimestamp.compareTo(b.rawTimestamp);
-      return c != 0 ? c : a.status.compareTo(b.status);
-    });
     return blocks;
   }
 

@@ -334,3 +334,265 @@ List<SensorReading> decodeStatsV2({
 
   return readings;
 }
+
+/// Decodifica blocos do Wellington Monitor (`productId == 16`) ou dispositivos
+/// com `protocolVersion < 30`, replicando a classe `_-CN` do bytecode de
+/// `Main.swf` e `StatisticSetVO.setValue`.
+///
+/// No Monitor (ex.: `protocolVersion == 7`, `64`, `65`, `66+`), os blocos NÃO
+/// usam compressão LZSS nem pares `[tag, statLength]`. Cada item começa com
+/// `itemType = b0 & 0x0F`:
+///   - `1` (`ITEM_TYPE_EVENT`): `[b0, code u8]` (2 B)
+///   - `2` (`ITEM_TYPE_ADVANCE_TIME_S`): 12-bit int `(b0 >> 4) + (b1 << 4)` segundos (2 B)
+///   - `3..6` (`EXT_STATS=3`, `STATS=4`, `DONGLE=5`, `DIAG=6`):
+///     bitmask de 12 bits `(b0 >> 4) + (b1 << 4)` indicando quais dos 12 canais
+///     têm 1 byte a seguir, mais 1 byte de alinhamento se o número de bits
+///     ativos for ímpar.
+///   - `7` (`ITEM_TYPE_FIRMWARE_UPDATE_HEADER`): 6 B no total (`b0`, `b1`,
+///     `major u16 LE`, `minor u16 LE`).
+///   - `0xFF, 0xFF`: fim do bloco.
+List<SensorReading> decodeMonitorBlocks({
+  required List<ScsEventBlock> blocks,
+  required int sensorToUnixOffsetSecs,
+  required int protocolVersion,
+}) {
+  final readings = <SensorReading>[];
+
+  int countSetBits12(int mask) {
+    int count = 0;
+    for (int i = 0; i < 16; i++) {
+      if ((mask & (1 << i)) != 0) count++;
+    }
+    return count;
+  }
+
+  for (final block in blocks) {
+    final data = block.data;
+    final pv = block.protocolVersion > 0 ? block.protocolVersion : protocolVersion;
+    int currTs = block.rawTimestamp;
+    int pos = 0;
+    bool endOfBlock = false;
+
+    int? curSampleTs;
+    double? curTemp1Ave;
+    double? curTemp1Min;
+    double? curTemp1Max;
+    int? curTempAmbRaw;
+    int highByte = 0;
+    double? monitorT1Ave;
+
+    void flushSample() {
+      if (curSampleTs == null || curTemp1Ave == null) return;
+      double t = curTemp1Ave!;
+      int ambOffset = 0;
+      if (pv >= 22 && curTempAmbRaw != null) {
+        ambOffset = curTempAmbRaw! > 127 ? curTempAmbRaw! - 256 : curTempAmbRaw!;
+      }
+      if ((t == -5.0 || t == 20.5) &&
+          curTemp1Min != null &&
+          curTemp1Max != null) {
+        t = (curTemp1Min! + curTemp1Max!) / 2.0;
+      } else {
+        t = t + ambOffset;
+      }
+      if (t >= -50.0 && t <= 85.0) {
+        final unixSecs = curSampleTs! + sensorToUnixOffsetSecs;
+        readings.add(SensorReading(
+          timestamp: DateTime.fromMillisecondsSinceEpoch(
+            unixSecs * 1000,
+            isUtc: true,
+          ),
+          temperature: double.parse(t.toStringAsFixed(2)),
+        ));
+      }
+      curSampleTs = null;
+      curTemp1Ave = null;
+      curTemp1Min = null;
+      curTemp1Max = null;
+      curTempAmbRaw = null;
+    }
+
+    while (!endOfBlock && pos < data.length) {
+      if (pos + 2 > data.length) break;
+      final b0 = data[pos++];
+      final b1 = data[pos++];
+      if (b0 == 0xFF && b1 == 0xFF) {
+        endOfBlock = true;
+        break;
+      }
+      // Volta b1 para que cada caso leia como no original
+      pos--;
+      final itemType = b0 & 0x0F;
+
+      switch (itemType) {
+        case 1: // ITEM_TYPE_EVENT
+          if (pos >= data.length) {
+            endOfBlock = true;
+            break;
+          }
+          pos++; // event code u8
+          break;
+
+        case 2: // ITEM_TYPE_ADVANCE_TIME_S
+          if (pos >= data.length) {
+            endOfBlock = true;
+            break;
+          }
+          final nb = data[pos++];
+          final advanceSecs = (b0 >> 4) + (nb << 4);
+          currTs += advanceSecs;
+          break;
+
+        case 3: // ITEM_TYPE_EXT_STATS_HEADER
+        case 4: // ITEM_TYPE_STATS_HEADER
+        case 5: // ITEM_TYPE_DONGLE_HEADER
+        case 6: // ITEM_TYPE_DIAG_HEADER
+          if (pos >= data.length) {
+            endOfBlock = true;
+            break;
+          }
+          final nb = data[pos++];
+          final mask = (b0 >> 4) + (nb << 4);
+          final numBits = countSetBits12(mask);
+          if (pos + numBits > data.length) {
+            endOfBlock = true;
+            break;
+          }
+          if (curSampleTs != null && curSampleTs != currTs) {
+            flushSample();
+          }
+          curSampleTs = currTs;
+
+          for (int bitIdx = 0; bitIdx < 12; bitIdx++) {
+            final bitMask = 1 << bitIdx;
+            if ((mask & bitMask) == 0) continue;
+            final val = data[pos++];
+
+            if (pv < 64) {
+              if (itemType == 4) {
+                // ITEM_TYPE_STATS_HEADER: bit 8=AVTEMP1, 16=MAXTEMP1, 32=MINTEMP1
+                if (bitMask == 8 && val != 255) {
+                  final signed = val > 127 ? val - 256 : val;
+                  curTemp1Ave = (signed + 78) / 10.0;
+                } else if (bitMask == 16 && val != 255) {
+                  final signed = val > 127 ? val - 256 : val;
+                  curTemp1Max = (signed - 40).toDouble();
+                } else if (bitMask == 32 && val != 255) {
+                  final signed = val > 127 ? val - 256 : val;
+                  curTemp1Min = (signed - 40).toDouble();
+                }
+              } else if (itemType == 3 && bitMask == 1 && val != 255) {
+                // ITEM_TYPE_EXT_STATS_HEADER: bit 1 = tempAmbAve
+                curTempAmbRaw = val;
+              } else if (itemType == 5 && bitMask == 4 && val != 255) {
+                // ITEM_TYPE_DONGLE_HEADER: bit 4 = AVTEMP1
+                final signed = val > 127 ? val - 256 : val;
+                curTemp1Ave = (signed + 78) / 10.0;
+              }
+            } else if (pv == 64) {
+              // maskType 100 (_-7W): bit 8=AVTEMP1, 32=MAXTEMP1, 64=MINTEMP1
+              if (bitMask == 8 && val != 255) {
+                final signed = val > 127 ? val - 256 : val;
+                curTemp1Ave = (signed + 78) / 10.0;
+              } else if (bitMask == 32 && val != 255) {
+                final signed = val > 127 ? val - 256 : val;
+                curTemp1Max = signed.toDouble();
+              } else if (bitMask == 64 && val != 255) {
+                final signed = val > 127 ? val - 256 : val;
+                curTemp1Min = signed.toDouble();
+              }
+            } else if (pv == 65) {
+              if (itemType == 4) {
+                // MASK_TYPE_MONITOR_PV65_1 (102): bit 8=hi, 16=lo(AVTEMP1), 32=+max, 64=-min
+                if (bitMask == 8) {
+                  highByte = val;
+                } else if (bitMask == 16) {
+                  int raw16 = highByte * 256 + val;
+                  if (raw16 > 32767) raw16 -= 65536;
+                  if (raw16 != 32767) {
+                    monitorT1Ave = raw16 / 10.0;
+                    curTemp1Ave = monitorT1Ave;
+                  } else {
+                    monitorT1Ave = null;
+                  }
+                } else if (bitMask == 32 && monitorT1Ave != null && val < 255) {
+                  curTemp1Max = monitorT1Ave + val / 10.0;
+                } else if (bitMask == 64 && monitorT1Ave != null && val < 255) {
+                  curTemp1Min = monitorT1Ave - val / 10.0;
+                }
+              }
+            } else {
+              // pv >= 66: maskType 101 (_-16): bit 1=hi, 2=lo(temp1Ave / 10)
+              if (bitMask == 1 ||
+                  bitMask == 4 ||
+                  bitMask == 32 ||
+                  bitMask == 1024) {
+                highByte = val;
+              } else if (bitMask == 2) {
+                int raw16 = highByte * 256 + val;
+                if (raw16 > 32767) raw16 -= 65536;
+                if (raw16 != 32767) {
+                  curTemp1Ave = raw16 / 10.0;
+                }
+              }
+            }
+          }
+          // Byte extra de alinhamento quando o número de bits ativos é ímpar
+          if ((numBits & 1) != 0 && pos < data.length) {
+            pos++;
+          }
+          break;
+
+        case 7: // ITEM_TYPE_FIRMWARE_UPDATE_HEADER
+          // Consome o segundo byte do cabeçalho + 4 bytes de versão (major u16, minor u16)
+          if (pos + 5 > data.length) {
+            endOfBlock = true;
+            break;
+          }
+          pos += 5;
+          break;
+
+        default:
+          endOfBlock = true;
+          break;
+      }
+    }
+    flushSample();
+  }
+
+  return readings;
+}
+
+/// Ponto único de decodificação dos blocos da memória flash SCS:
+/// usa o formato nativo do Monitor ([decodeMonitorBlocks]) e, caso o bloco
+/// esteja no formato comprimido LZSS V2 (`productId == 1` com `pv == 30`),
+/// faz fallback para [decodeStatsV2].
+List<SensorReading> decodeScsFlashBlocks({
+  required List<ScsEventBlock> blocks,
+  required int sensorToUnixOffsetSecs,
+  required int protocolVersion,
+  int productId = 16,
+  int pageSize = 1024,
+}) {
+  if (productId == 16 || protocolVersion < 30) {
+    final monitorReadings = decodeMonitorBlocks(
+      blocks: blocks,
+      sensorToUnixOffsetSecs: sensorToUnixOffsetSecs,
+      protocolVersion: protocolVersion,
+    );
+    if (monitorReadings.isNotEmpty) return monitorReadings;
+  }
+  final v2Readings = decodeStatsV2(
+    blocks: blocks,
+    sensorToUnixOffsetSecs: sensorToUnixOffsetSecs,
+    protocolVersion: protocolVersion,
+    pageSize: pageSize,
+  );
+  if (v2Readings.isNotEmpty) return v2Readings;
+  return decodeMonitorBlocks(
+    blocks: blocks,
+    sensorToUnixOffsetSecs: sensorToUnixOffsetSecs,
+    protocolVersion: protocolVersion,
+  );
+}
+

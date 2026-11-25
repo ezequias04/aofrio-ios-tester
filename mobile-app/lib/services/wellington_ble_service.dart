@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/sensor_reading.dart';
+import 'scs_auth.dart';
 import 'scs_event_log_reader.dart';
 import 'scs_stats_decoder.dart';
 
@@ -132,6 +133,10 @@ class WellingtonBleService {
   BluetoothCharacteristic? _assetTrackTxChar;
   BluetoothCharacteristic? _bulkTxChar;
   BluetoothCharacteristic? _rxChar;
+  BluetoothCharacteristic? _authChar;
+  BluetoothCharacteristic? _authRespChar;
+  BluetoothCharacteristic? _diagTxChar;
+  ScsAuthResult? _lastAuth;
   bool _suspendWatchdog = false;
 
   /// Quanto tempo a última temperatura lida continua valendo quando só chegam
@@ -560,11 +565,14 @@ class WellingtonBleService {
     await FlutterBluePlus.stopScan();
   }
 
+  ScsAuthResult? get lastAuth => _lastAuth;
+
   Future<bool> connect(String deviceId) async {
     final device = BluetoothDevice.fromId(deviceId);
     // Guardado ANTES de conectar: se a conexão falhar no meio, [disconnect]
     // ainda consegue encerrar tudo.
     _connectedDevice = device;
+    _lastAuth = null;
     await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
 
     final services = await device.discoverServices();
@@ -584,9 +592,32 @@ class WellingtonBleService {
     _bulkTxChar = assetTrack.characteristics.firstWhere(
       (c) => c.uuid.str128.toLowerCase() == assetTrackBulkTxCharacteristicUuid,
     );
-    // Opcional: sem ele só o laudo ao vivo funciona, o download do log não.
     _rxChar = assetTrack.characteristics.cast<BluetoothCharacteristic?>().firstWhere(
           (c) => c!.uuid.str128.toLowerCase() == assetTrackRxCharacteristicUuid,
+          orElse: () => null,
+        );
+
+    // Serviço SCS_ADMIN_SERVICE para handshake ScsAuth (34d81c0d / 673ebc29)
+    final adminSvc = services.cast<BluetoothService?>().firstWhere(
+          (s) => s!.uuid.str128.toLowerCase() == adminServiceUuid,
+          orElse: () => null,
+        );
+    _authChar = adminSvc?.characteristics.cast<BluetoothCharacteristic?>().firstWhere(
+          (c) => c!.uuid.str128.toLowerCase() == authCharacteristicUuid,
+          orElse: () => null,
+        );
+    _authRespChar = adminSvc?.characteristics.cast<BluetoothCharacteristic?>().firstWhere(
+          (c) => c!.uuid.str128.toLowerCase() == authResponseCharacteristicUuid,
+          orElse: () => null,
+        );
+
+    // Serviço SCS_DIAGNOSTIC_SERVICE (dcd9889f)
+    final diagSvc = services.cast<BluetoothService?>().firstWhere(
+          (s) => s!.uuid.str128.toLowerCase() == diagnosticServiceUuid,
+          orElse: () => null,
+        );
+    _diagTxChar = diagSvc?.characteristics.cast<BluetoothCharacteristic?>().firstWhere(
+          (c) => c!.uuid.str128.toLowerCase() == diagnosticTxCharacteristicUuid,
           orElse: () => null,
         );
 
@@ -595,49 +626,83 @@ class WellingtonBleService {
     _log('ADV ${_advInfo[deviceId] ?? '(sem dados de anúncio)'}');
     _dumpAdvSamples(deviceId);
     _log('MTU ${device.mtuNow}');
-    // Diagnóstico (só leitura + inscrição, nada é escrito): todos os serviços.
-    for (final svc in services) {
-      final s8 = svc.uuid.str128.substring(0, 8);
-      for (final c in svc.characteristics) {
-        final c8 = c.uuid.str128.substring(0, 8);
-        final p = c.properties;
-        _log('CHAR $s8/$c8 ${[if (p.read) 'R', if (p.write) 'W', if (p.writeWithoutResponse) 'WNR', if (p.notify) 'N', if (p.indicate) 'I'].join('')}');
-        if (p.read) {
-          try {
-            _log('READ $s8/$c8', await c.read());
-          } catch (e) {
-            _log('READ $s8/$c8 falhou: $e');
-          }
-        }
-        final isAssetTx = c.uuid.str128.toLowerCase() == assetTrackTxCharacteristicUuid ||
-            c.uuid.str128.toLowerCase() == assetTrackBulkTxCharacteristicUuid;
-        if ((p.notify || p.indicate) && !isAssetTx) {
-          try {
-            await c.setNotifyValue(true);
-            _connSubs.add(c.onValueReceived.listen((v) => _log('NOTIF $s8/$c8', v)));
-            _log('NOTIFY ON $s8/$c8');
-          } catch (e) {
-            _log('NOTIFY $s8/$c8 falhou: $e');
-          }
-        }
+
+    // 1. Ativa notificações em SCS_ASSET_TRACK_TX_CHARACTERISTIC (efdd2460),
+    // exatamente como onServicesDiscovered no app oficial SCS Field.
+    _log('NOTIFY TX efdd2460 -> ${await _assetTrackTxChar!.setNotifyValue(true)}');
+    _connSubs.add(_assetTrackTxChar!.onValueReceived.listen((bytes) {
+      if (bytes.isEmpty) return;
+      _log('TX', bytes);
+      final raw = Uint8List.fromList(bytes);
+      _statusController.add(_lastAuth?.transformPacket(raw) ?? raw);
+    }));
+
+    // 2. Ativa notificações em SCS_ASSET_TRACK_BULK_TX_CHARACTERISTIC (ffdd2460).
+    _log('NOTIFY BULK ffdd2460 -> ${await _bulkTxChar!.setNotifyValue(true)}');
+    _connSubs.add(_bulkTxChar!.onValueReceived.listen((bytes) {
+      if (bytes.isEmpty) return;
+      _log('BULK', bytes);
+      final raw = Uint8List.fromList(bytes);
+      _eventBlockController.add(_lastAuth?.transformPacket(raw) ?? raw);
+    }));
+
+    // 3. Se SCS_DIAGNOSTIC_TX_CHARACTERISTIC existir, ativa notificação (sem
+    // escrever nem ler características de auth antes do handshake!).
+    if (_diagTxChar != null) {
+      try {
+        await _diagTxChar!.setNotifyValue(true);
+        _connSubs.add(_diagTxChar!.onValueReceived.listen((v) => _log('DIAG_TX', v)));
+      } catch (e) {
+        _log('NOTIFY DIAG_TX falhou: $e');
       }
     }
 
-    // Ativar notificação em ambas as características é tudo que o "handshake"
-    // de autenticação exige para o Monitor — ver nota no topo do arquivo.
-    _log('NOTIFY TX efdd2460 -> ${await _assetTrackTxChar!.setNotifyValue(true)}');
-    _connSubs.add(_assetTrackTxChar!.lastValueStream.listen((bytes) {
-      if (bytes.isEmpty) return;
-      _log('TX', bytes);
-      _statusController.add(Uint8List.fromList(bytes));
-    }));
+    // 4. Executa o handshake obrigatório ScsAuth em SCS_ADMIN_SERVICE
+    // (34d81c0d -> 673ebc29). Sem isto o sensor ignora cmd 1 e cmd 5!
+    if (_authChar != null && _authRespChar != null) {
+      final authNotifController = StreamController<Uint8List>.broadcast();
+      try {
+        if (_authRespChar!.properties.notify || _authRespChar!.properties.indicate) {
+          await _authRespChar!.setNotifyValue(true);
+          _connSubs.add(_authRespChar!.onValueReceived.listen((v) {
+            if (v.isNotEmpty) {
+              _log('AUTH_NOTIF', v);
+              authNotifController.add(Uint8List.fromList(v));
+            }
+          }));
+        }
+      } catch (e) {
+        _log('AUTH_NOTIFY falhou (usando read puro): $e');
+      }
 
-    _log('NOTIFY BULK ffdd2460 -> ${await _bulkTxChar!.setNotifyValue(true)}');
-    _connSubs.add(_bulkTxChar!.lastValueStream.listen((bytes) {
-      if (bytes.isEmpty) return;
-      _log('BULK', bytes);
-      _eventBlockController.add(Uint8List.fromList(bytes));
-    }));
+      try {
+        flashStage.value = 'Autenticando com o sensor...';
+        final isIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+        _lastAuth = await performScsAuthentication(
+          writeAuth: (bytes) async {
+            _log('AUTH_WRITE', bytes);
+            await _authChar!.write(bytes.toList(), withoutResponse: false);
+          },
+          readAuthResponse: () async {
+            final r = await _authRespChar!.read();
+            _log('AUTH_READ', r);
+            return Uint8List.fromList(r);
+          },
+          authNotifications: authNotifController.stream,
+          isIos: isIos,
+        );
+        _log(
+          'AUTH_OK pv=${_lastAuth!.protocolVersion} '
+          'fwRev=${_lastAuth!.controllerCodeRevision} '
+          'prodId=${_lastAuth!.productId} '
+          'fastRead=${_lastAuth!.supportsFastEventBlockRead}',
+        );
+      } finally {
+        await authNotifController.close();
+      }
+    } else {
+      _log('AVISO: SCS_AUTH_CHARACTERISTIC não encontrada; tentando sem auth.');
+    }
 
     _isConnected = true;
     return true;
@@ -656,16 +721,17 @@ class WellingtonBleService {
       }
     });
     try {
-      await req.write([scsRequestTimestamp], withoutResponse: false);
+      final rawCmd = Uint8List.fromList([scsRequestTimestamp]);
+      final toSend = _lastAuth?.transformPacket(rawCmd) ?? rawCmd;
+      await req.write(toSend.toList(), withoutResponse: false);
       return await completer.future.timeout(const Duration(seconds: 3));
     } finally {
       await sub.cancel();
     }
   }
 
-  /// Baixa o log de páginas do sensor (protocolo do app oficial). Não usado pelo
-  /// laudo ainda: falta validar com hardware. [protocolVersion] e [fastRead]
-  /// vêm do dispositivo (fastRead: controllerCodeRevision >= 4 no Monitor).
+  /// Baixa o log de páginas do sensor (protocolo do app oficial).
+  /// [protocolVersion] e [fastRead] vêm do handshake [ScsAuthResult].
   Future<List<ScsEventBlock>> downloadEventLog({
     required int reqTimeSecs,
     required int protocolVersion,
@@ -675,8 +741,14 @@ class WellingtonBleService {
     final rx = _rxChar;
     if (req == null || rx == null) throw Exception('Não conectado.');
     final reader = ScsEventLogReader(
-      writeReqData: (b) => req.write(b.toList(), withoutResponse: false),
-      writeRx: (b) => rx.write(b.toList(), withoutResponse: false),
+      writeReqData: (b) {
+        final enc = _lastAuth?.transformPacket(b) ?? b;
+        return req.write(enc.toList(), withoutResponse: false);
+      },
+      writeRx: (b) {
+        final enc = _lastAuth?.transformPacket(b) ?? b;
+        return rx.write(enc.toList(), withoutResponse: false);
+      },
       tx: rawStatusNotifications,
       bulk: rawEventBlocks,
       protocolVersion: protocolVersion,
@@ -690,11 +762,9 @@ class WellingtonBleService {
   }
 
   /// Diagnóstico do log de páginas, para validar o protocolo com hardware real.
-  /// Procura o Monitor, conecta, sincroniza o relógio, baixa o log, decodifica
-  /// e desconecta. Devolve linhas de texto para mostrar ao técnico.
-  /// protocolVersion 70 é suposição: o bloco traz o valor real (ver última linha).
+  /// Procura o Monitor, conecta, autentica (ScsAuth), sincroniza o relógio,
+  /// baixa o log, decodifica e desconecta.
   Future<List<String>> runEventLogDiagnostic() async {
-    const assumedProtocolVersion = 70;
     final lines = <String>[];
     final id = await _findMonitorId();
     if (id == null) {
@@ -703,27 +773,40 @@ class WellingtonBleService {
     lines.add('Monitor: $id');
     await connect(id);
     try {
+      final auth = _lastAuth;
+      final pv = auth?.protocolVersion ?? 7;
+      final prodId = auth?.productId ?? productIdMonitor;
+      if (auth != null) {
+        lines.add(
+          'Auth SCS OK: pv=$pv fw=${auth.controllerCodeRevision} '
+          'prodId=$prodId fast=${auth.supportsFastEventBlockRead}',
+        );
+      }
       final sensorTs = await requestSensorTimestamp();
       final offset = DateTime.now().millisecondsSinceEpoch ~/ 1000 - sensorTs;
       lines.add('Relógio do sensor: $sensorTs s (offset ${offset}s)');
 
-      var fast = true;
+      var fast = auth?.supportsFastEventBlockRead ?? true;
       List<ScsEventBlock> blocks;
       try {
         blocks = await downloadEventLog(
-            reqTimeSecs: 0, protocolVersion: assumedProtocolVersion, fastRead: true);
+            reqTimeSecs: 0, protocolVersion: pv, fastRead: fast);
       } catch (e) {
         lines.add('Modo rápido falhou ($e). Tentando modo normal.');
         fast = false;
         blocks = await downloadEventLog(
-            reqTimeSecs: 0, protocolVersion: assumedProtocolVersion, fastRead: false);
+            reqTimeSecs: 0, protocolVersion: pv, fastRead: false);
       }
       lines.add('Modo: ${fast ? 'rápido' : 'normal'}. Blocos válidos: ${blocks.length}');
 
-      final readings = decodeStatsV2(
+      final realPv = (blocks.isNotEmpty && blocks.first.protocolVersion > 0)
+          ? blocks.first.protocolVersion
+          : pv;
+      final readings = decodeScsFlashBlocks(
         blocks: blocks,
         sensorToUnixOffsetSecs: offset,
-        protocolVersion: assumedProtocolVersion,
+        protocolVersion: realPv,
+        productId: prodId,
       );
       lines.add('Leituras de temperatura: ${readings.length}');
       if (readings.isNotEmpty) {
@@ -742,14 +825,14 @@ class WellingtonBleService {
     return lines;
   }
 
-  /// Conecta em um sensor específico, lê o relógio RTC, baixa páginas da memória
-  /// flash via protocolo SCS Field (`cmd 5/1/3`) e decodifica com `decodeStatsV2`,
-  /// usando a versão real de protocolo informada pelo primeiro bloco.
+  /// Conecta em um sensor específico, realiza o handshake de autenticação SCS
+  /// (`34d81c0d` -> `673ebc29`), lê o relógio RTC, baixa páginas da memória
+  /// flash via protocolo SCS Field (`cmd 5/1/3`) e decodifica com
+  /// `decodeScsFlashBlocks` (suporta o formato bitmask nativo do Monitor e V2).
   Future<FlashDownloadResult> downloadDecodedFlashHistory(
     String deviceId, {
     int reqTimeSecs = 0,
   }) async {
-    const assumedProtocolVersion = 70;
     final lines = <String>['Sensor alvo: $deviceId'];
 
     _suspendWatchdog = true;
@@ -765,6 +848,17 @@ class WellingtonBleService {
       // desconecta e para tudo (antes a conexão ficava aberta lendo o sensor).
       flashStage.value = 'Conectando ao sensor...';
       await connect(deviceId);
+
+      final auth = _lastAuth;
+      final authPv = auth?.protocolVersion ?? 7;
+      final prodId = auth?.productId ?? productIdMonitor;
+      if (auth != null) {
+        lines.add(
+          'Autenticação SCS: OK (protocolo v$authPv • '
+          'firmware r${auth.controllerCodeRevision} • prodId $prodId)',
+        );
+      }
+
       flashStage.value = 'Lendo o relógio do sensor...';
       // Uma nova tentativa: no iPhone a primeira resposta às vezes se perde.
       int sensorTs;
@@ -779,20 +873,20 @@ class WellingtonBleService {
       lines.add('Relógio RTC do sensor: $sensorTs s (offset ${offset}s)');
 
       flashStage.value = 'Baixando o histórico de temperatura...';
-      var fast = true;
+      var fast = auth?.supportsFastEventBlockRead ?? true;
       List<ScsEventBlock> blocks;
       try {
         blocks = await downloadEventLog(
           reqTimeSecs: reqTimeSecs,
-          protocolVersion: assumedProtocolVersion,
-          fastRead: true,
+          protocolVersion: authPv,
+          fastRead: fast,
         );
       } catch (e) {
         lines.add('Modo rápido falhou ($e). Alternando para leitura chunk a chunk.');
         fast = false;
         blocks = await downloadEventLog(
           reqTimeSecs: reqTimeSecs,
-          protocolVersion: assumedProtocolVersion,
+          protocolVersion: authPv,
           fastRead: false,
         );
       }
@@ -800,13 +894,14 @@ class WellingtonBleService {
 
       final realPv = (blocks.isNotEmpty && blocks.first.protocolVersion > 0)
           ? blocks.first.protocolVersion
-          : assumedProtocolVersion;
+          : authPv;
 
       flashStage.value = 'Organizando as leituras...';
-      final readings = decodeStatsV2(
+      final readings = decodeScsFlashBlocks(
         blocks: blocks,
         sensorToUnixOffsetSecs: offset,
         protocolVersion: realPv,
+        productId: prodId,
       )..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
       lines.add('protocolVersion detectado: $realPv');
@@ -1108,6 +1203,10 @@ class WellingtonBleService {
     _assetTrackTxChar = null;
     _bulkTxChar = null;
     _rxChar = null;
+    _authChar = null;
+    _authRespChar = null;
+    _diagTxChar = null;
+    _lastAuth = null;
     _isConnected = false;
   }
 }

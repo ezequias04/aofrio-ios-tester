@@ -239,23 +239,13 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
     );
   }
 
-  static const int _nearRssi = -85;
-
   Widget _buildStepBody(
     List<LiveTelemetry> sensors,
     LiveTelemetry? selectedSensor,
     BenchController controller,
   ) {
     if (_step == 0) {
-      // Só sensores com sinal utilizável (ou já escolhidos/em uso): os de
-      // -90 dBm ficam a dezenas de metros e poluíam a lista.
-      final nearby = sensors
-          .where((s) =>
-              s.rssi >= _nearRssi ||
-              s.deviceId == _selectedSensorId ||
-              s.deviceId.startsWith('SIM-'))
-          .toList();
-      final hiddenFar = sensors.length - nearby.length;
+      final hiddenFar = controller.hiddenDistantSensorsCount;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -282,8 +272,28 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
             'Nenhuma conexão automática é feita. Toque no sensor instalado dentro da geladeira em teste.',
             style: TextStyle(color: AppColors.slate, fontSize: 13),
           ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              FilterChip(
+                selected: controller.filterStrongOnly,
+                showCheckmark: true,
+                label: Text(
+                  controller.filterStrongOnly
+                      ? 'Apenas Próximos (Sinal Forte ≥ ${BenchController.strongRssiThreshold} dBm)'
+                      : 'Todos os Sensores Detectados',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: controller.filterStrongOnly ? AppColors.indigo : AppColors.ink,
+                  ),
+                ),
+                onSelected: (val) => controller.setFilterStrongOnly(val),
+              ),
+            ],
+          ),
           if (_isAndroid) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -305,7 +315,7 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
             ),
           ],
           const SizedBox(height: 14),
-          if (nearby.isEmpty)
+          if (sensors.isEmpty)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -322,11 +332,20 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
-                      'Aproxime o telefone do sensor MON1-001 ou habilite o Simulador de Bancada na aba Normas.',
+                    Text(
+                      controller.filterStrongOnly
+                          ? 'Aproxime o celular do sensor da geladeira (sinal forte ≥ ${BenchController.strongRssiThreshold} dBm).'
+                          : 'Aguardando qualquer sensor Wellington/AoFrio anunciar.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12.5, color: AppColors.slate),
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.slate),
                     ),
+                    if (hiddenFar > 0) ...[
+                      const SizedBox(height: 10),
+                      TextButton(
+                        onPressed: () => controller.setFilterStrongOnly(false),
+                        child: Text('Exibir $hiddenFar sensor(es) distantes'),
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     OutlinedButton.icon(
                       onPressed: () => controller.startRadar(restart: true),
@@ -338,10 +357,13 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
               ),
             )
           else
-            ...nearby.map((s) {
+            ...sensors.map((s) {
               final inUse = controller.activeSessionForSensor(s.deviceId);
               final isSelected = _selectedSensorId == s.deviceId;
               final isSim = s.deviceId.startsWith('SIM-');
+              final signalDesc = s.rssi >= -65
+                  ? 'Forte'
+                  : (s.rssi >= BenchController.strongRssiThreshold ? 'Bom' : 'Distante');
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Card(
@@ -381,7 +403,7 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
                     subtitle: Text(
                       inUse != null
                           ? 'Em uso por ${inUse.serialNumber}'
-                          : 'ID ${s.deviceId} • ${s.rssi} dBm${isSim ? ' • SIMULAÇÃO' : ''}',
+                          : 'Sinal $signalDesc (${s.rssi} dBm)${isSim ? ' • SIMULAÇÃO' : ''}',
                       style: const TextStyle(fontSize: 12),
                     ),
                     trailing: Text(
@@ -404,10 +426,20 @@ class _CommissioningWizardScreenState extends State<CommissioningWizardScreen> {
             }),
           if (hiddenFar > 0)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                '$hiddenFar sensor(es) distante(s) oculto(s). Aproxime o telefone do sensor da geladeira.',
-                style: const TextStyle(fontSize: 12.5, color: AppColors.slate),
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$hiddenFar sensor(es) distantes ocultados para evitar confusão.',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.slate),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => controller.setFilterStrongOnly(!controller.filterStrongOnly),
+                    child: Text(controller.filterStrongOnly ? 'Ver todos' : 'Ocultar distantes'),
+                  ),
+                ],
               ),
             ),
         ],

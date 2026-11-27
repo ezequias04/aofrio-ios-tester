@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../main.dart';
 import '../../services/wellington_ble_service.dart';
+import '../../state/bench_controller.dart';
 import '../../theme/app_theme.dart';
 import '../diagnostic_live_screen.dart';
 import '../flash_log_screen.dart';
@@ -174,6 +175,26 @@ class _SensorsTabState extends State<SensorsTab> {
               ),
             ],
             const SizedBox(height: 14),
+            Row(
+              children: [
+                FilterChip(
+                  selected: controller.filterStrongOnly,
+                  showCheckmark: true,
+                  label: Text(
+                    controller.filterStrongOnly
+                        ? 'Apenas Próximos (Sinal Forte ≥ ${BenchController.strongRssiThreshold} dBm)'
+                        : 'Todos os Sensores Detectados',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: controller.filterStrongOnly ? AppColors.indigo : AppColors.ink,
+                    ),
+                  ),
+                  onSelected: (val) => controller.setFilterStrongOnly(val),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             if (sensors.isEmpty)
               Card(
                 child: Padding(

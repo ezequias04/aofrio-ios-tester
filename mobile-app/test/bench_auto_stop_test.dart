@@ -44,16 +44,16 @@ void main() {
     expect(BenchController.autoStopReasonFor(s, t0.add(const Duration(minutes: 30))), isNull);
   });
 
-  test('para após a meta mantida por 5 min', () {
+  test('para após a meta mantida e estabilizada por 45s', () {
     final reached = t0.add(const Duration(minutes: 40));
     final s = session(
       start: t0,
       temps: [25, 20, 15, 10, 5, 3, 2.8],
       targetReachedAt: reached,
     );
-    expect(BenchController.autoStopReasonFor(s, reached.add(const Duration(minutes: 4))), isNull);
+    expect(BenchController.autoStopReasonFor(s, reached.add(const Duration(seconds: 30))), isNull);
     expect(
-      BenchController.autoStopReasonFor(s, reached.add(const Duration(minutes: 5))),
+      BenchController.autoStopReasonFor(s, reached.add(const Duration(seconds: 45))),
       contains('meta'),
     );
   });
@@ -72,6 +72,17 @@ void main() {
     expect(
       BenchController.autoStopReasonFor(s, t0.add(const Duration(minutes: 10))),
       contains('segurança'),
+    );
+  });
+
+  test('para por estagnação térmica se a temperatura estabilizar acima da meta', () {
+    final s = session(
+      start: t0,
+      temps: [25, 20, 16, 12, 10, 8, 8.0, 8.05, 8.0, 7.95, 8.0],
+    );
+    expect(
+      BenchController.autoStopReasonFor(s, t0.add(const Duration(minutes: 16))),
+      contains('estagnação'),
     );
   });
 }

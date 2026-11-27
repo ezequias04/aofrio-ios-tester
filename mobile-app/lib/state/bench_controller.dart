@@ -71,20 +71,80 @@ class BenchController extends ChangeNotifier {
   List<BenchSession> get activeSessions => List.unmodifiable(_activeSessions);
   List<TestResult> get savedReports => List.unmodifiable(_savedReports);
 
+  /// Limiar de RSSI para considerar o sensor próximo com sinal forte (ex: bancada imediata).
+  static const int strongRssiThreshold = -75;
+
+  /// Margem de tolerância (histerese) para o sensor não sumir da tela se o sinal oscilar.
+  static const int hysteresisDropThreshold = -82;
+
+  /// Janela de retenção para o sensor não piscar (aparecer e sumir de novo).
+  static const Duration sensorRetentionDelay = Duration(seconds: 12);
+
+  /// Filtro padrão: exibe apenas sensores próximos com sinal forte.
+  bool _filterStrongOnly = true;
+  bool get filterStrongOnly => _filterStrongOnly;
+
+  void setFilterStrongOnly(bool value) {
+    _filterStrongOnly = value;
+    notifyListeners();
+  }
+
+  /// Registro de sensores que se qualificaram como próximos com sinal forte
+  /// e o instante em que foram vistos pela última vez nessa condição.
+  final Map<String, DateTime> _nearbyQualifiedAt = {};
 
   /// Lista combinada de sensores ativos (reais + simulados se modo demo ativo),
-  /// em ordem fixa (nome do ativo): ordenar por sinal fazia a lista pular.
+  /// filtrada por sinal forte e ordenada de forma fixa para a tela não tremer.
   List<LiveTelemetry> get discoveredSensors {
+    final now = DateTime.now();
     final map = <String, LiveTelemetry>{..._realSensors};
     if (_demoModeEnabled) {
       map.addAll(_demoSensors);
     }
-    final list = map.values.toList()
-      ..sort((a, b) {
+
+    final all = map.values.toList();
+    if (!_filterStrongOnly) {
+      all.sort((a, b) {
+        final aLinked = activeSessionForSensor(a.deviceId) != null ? 0 : 1;
+        final bLinked = activeSessionForSensor(b.deviceId) != null ? 0 : 1;
+        if (aLinked != bLinked) return aLinked.compareTo(bLinked);
         final c = a.assetName.compareTo(b.assetName);
         return c != 0 ? c : a.deviceId.compareTo(b.deviceId);
       });
-    return list;
+      return all;
+    }
+
+    // Filtrar apenas sensores próximos com sinal forte, aplicando histerese/delay
+    // para não sumir da tela com oscilação passageira.
+    final filtered = all.where((s) {
+      if (s.deviceId.startsWith('SIM-')) return true;
+      if (activeSessionForSensor(s.deviceId) != null) return true;
+
+      final qualifiedAt = _nearbyQualifiedAt[s.deviceId];
+      final isRecentQualified = qualifiedAt != null &&
+          now.difference(qualifiedAt) <= sensorRetentionDelay &&
+          s.rssi >= hysteresisDropThreshold;
+
+      return s.rssi >= strongRssiThreshold || isRecentQualified;
+    }).toList();
+
+    filtered.sort((a, b) {
+      final aLinked = activeSessionForSensor(a.deviceId) != null ? 0 : 1;
+      final bLinked = activeSessionForSensor(b.deviceId) != null ? 0 : 1;
+      if (aLinked != bLinked) return aLinked.compareTo(bLinked);
+      final c = a.assetName.compareTo(b.assetName);
+      return c != 0 ? c : a.deviceId.compareTo(b.deviceId);
+    });
+
+    return filtered;
+  }
+
+  /// Quantidade de sensores distantes que foram ocultados pelo filtro de sinal forte.
+  int get hiddenDistantSensorsCount {
+    if (!_filterStrongOnly) return 0;
+    final total = _realSensors.length + (_demoModeEnabled ? _demoSensors.length : 0);
+    final count = total - discoveredSensors.length;
+    return count > 0 ? count : 0;
   }
 
   LiveTelemetry? telemetryForSensor(String sensorId) {
@@ -120,9 +180,9 @@ class BenchController extends ChangeNotifier {
     if (_demoModeEnabled) {
       _startDemoTicker();
     }
-    // Confere a cada 20 s mesmo sem telemetria (prazo vencido, app reaberto).
+    // Confere a cada 4 s as condições de parada automática (rápido e responsivo).
     _autoStopTimer?.cancel();
-    _autoStopTimer = Timer.periodic(const Duration(seconds: 20), (_) => _autoStopCheck());
+    _autoStopTimer = Timer.periodic(const Duration(seconds: 4), (_) => _autoStopCheck());
     _autoStopCheck();
     notifyListeners();
     unawaited(startRadar());
@@ -196,9 +256,23 @@ class BenchController extends ChangeNotifier {
 
   void _onTelemetryBatch(List<LiveTelemetry> batch) {
     bool shouldPersist = false;
+    final now = DateTime.now();
+
+    // Remove do cache sensores não vistos há mais de 25 segundos (exceto se em sessão ativa)
+    _realSensors.removeWhere((id, s) {
+      final inSession = activeSessionForSensor(id) != null;
+      if (!inSession && now.difference(s.at).inSeconds > 25) {
+        _nearbyQualifiedAt.remove(id);
+        return true;
+      }
+      return false;
+    });
 
     for (final t in batch) {
       _realSensors[t.deviceId] = t;
+      if (t.rssi >= strongRssiThreshold) {
+        _nearbyQualifiedAt[t.deviceId] = t.at;
+      }
 
       for (int i = 0; i < _activeSessions.length; i++) {
         final session = _activeSessions[i];
@@ -425,24 +499,30 @@ class BenchController extends ChangeNotifier {
 
   // ── Parada automática do ensaio ──────────────────────────────────────────
 
-  /// Depois de atingir a meta, o ensaio continua por este tempo para confirmar
-  /// que a temperatura se mantém, e então é encerrado e o laudo é gerado.
-  static const Duration autoStopHold = Duration(minutes: 5);
+  /// Depois de atingir a meta, o ensaio aguarda este tempo de estabilização
+  /// para confirmar que a temperatura se mantém no setpoint antes de encerrar.
+  static const Duration autoStopHold = Duration(seconds: 45);
 
   /// Mínimo de leituras para o laudo automático (o motor exige 5).
   static const int _autoStopMinReadings = 5;
 
   final Set<String> _autoStopBusy = {};
-  final Set<String> _autoStopGaveUp = {};
   final Map<String, TestResult> _autoReports = {};
   Timer? _autoStopTimer;
 
   /// Laudo gerado automaticamente para a sessão [sessionId], se houver.
   TestResult? autoReportFor(String sessionId) => _autoReports[sessionId];
 
+  /// Dispara checagem imediata de parada automática (chamado também pelo timer da tela ao vivo).
+  void checkAutoStopNow() => _autoStopCheck();
+
   /// Motivo pelo qual a sessão [s] deve parar agora, ou null se segue rodando.
-  /// Regras: (1) caiu abaixo do limite de segurança de congelamento;
-  /// (2) meta atingida e mantida por [autoStopHold]; (3) tempo máximo do perfil.
+  /// Regras:
+  /// (1) Limite de segurança de congelamento violado;
+  /// (2) Meta atingida e estabilizada por [autoStopHold];
+  /// (3) Detecção precoce de platô/estagnação térmica sem atingir meta;
+  /// (4) Falha de partida do compressor após janela inicial;
+  /// (5) Tempo máximo do perfil esgotado.
   static String? autoStopReasonFor(BenchSession s, DateTime now) {
     if (s.readings.length < _autoStopMinReadings) return null;
     final profile = s.profile;
@@ -451,18 +531,61 @@ class BenchController extends ChangeNotifier {
     for (final r in s.readings) {
       if (r.temperature < minTemp) minTemp = r.temperature;
     }
+
+    // 1. Limite de segurança contra congelamento de produtos
     final safety = profile.safetyMinTemperature;
     if (safety != null && minTemp < safety - 0.5) {
       return 'temperatura abaixo do limite de segurança '
           '(${minTemp.toStringAsFixed(1)}°C)';
     }
 
+    // 2. Meta térmica atingida e estabilizada
     final reachedAt = s.targetReachedAt;
     if (reachedAt != null && now.difference(reachedAt) >= autoStopHold) {
+      final holdDesc = autoStopHold.inMinutes > 0
+          ? '${autoStopHold.inMinutes} min'
+          : '${autoStopHold.inSeconds} s';
       return 'meta de ${profile.targetTemperature.toStringAsFixed(1)}°C '
-          'atingida e mantida por ${autoStopHold.inMinutes} min';
+          'atingida e mantida por $holdDesc';
     }
 
+    // 3. Detecção precoce de estagnação e falhas térmicas em campo
+    final elapsedMin = s.elapsed(now).inMinutes;
+    if (elapsedMin >= 15 && s.readings.length >= 8) {
+      final lastReading = s.readings.last;
+      final initialTemp = s.readings.first.temperature;
+      final totalDrop = initialTemp - lastReading.temperature;
+
+      // Falha total de partida: em 15+ min a queda total não passou de 0.8 °C
+      if (totalDrop < 0.8) {
+        return 'falha de partida (queda térmica de apenas ${totalDrop.toStringAsFixed(1)}°C em $elapsedMin min)';
+      }
+
+      // Estagnação prolongada em platô quente (> meta + 1.2 °C)
+      if (lastReading.temperature > profile.targetTemperature + 1.2) {
+        final recent = s.readings.length > 5
+            ? s.readings.sublist(s.readings.length - 5)
+            : s.readings;
+        if (recent.length >= 4) {
+          var rMin = recent.first.temperature;
+          var rMax = recent.first.temperature;
+          for (final r in recent) {
+            if (r.temperature < rMin) rMin = r.temperature;
+            if (r.temperature > rMax) rMax = r.temperature;
+          }
+          if ((rMax - rMin) <= 0.25) {
+            return 'estagnação térmica (temperatura estabilizou em ${lastReading.temperature.toStringAsFixed(1)}°C sem atingir a meta)';
+          }
+        }
+      }
+
+      // Reaquecimento prematuro (temperatura subiu >= 1.5 °C acima da mínima)
+      if (minTemp > profile.targetTemperature + 1.5 && (lastReading.temperature - minTemp) >= 1.5) {
+        return 'reaquecimento térmico prematuro (subiu para ${lastReading.temperature.toStringAsFixed(1)}°C)';
+      }
+    }
+
+    // 4. Tempo máximo do perfil
     final maxMin = profile.calculateMaxAllowedMinutes(s.readings.first.temperature);
     if (s.elapsed(now).inMinutes >= maxMin) {
       return 'tempo máximo do perfil ($maxMin min) esgotado';
@@ -473,7 +596,7 @@ class BenchController extends ChangeNotifier {
   void _autoStopCheck() {
     final now = DateTime.now();
     for (final s in List<BenchSession>.of(_activeSessions)) {
-      if (_autoStopBusy.contains(s.id) || _autoStopGaveUp.contains(s.id)) continue;
+      if (_autoStopBusy.contains(s.id)) continue;
       final reason = autoStopReasonFor(s, now);
       if (reason == null) continue;
       _autoStopBusy.add(s.id);
@@ -484,13 +607,11 @@ class BenchController extends ChangeNotifier {
   Future<void> _autoFinalize(String sessionId, String reason) async {
     try {
       await addNote(sessionId, 'Ensaio encerrado automaticamente: $reason.');
-      final result = await finalizeSession(sessionId, allowPartial: false);
+      final result = await finalizeSession(sessionId, allowPartial: true);
       _autoReports[sessionId] = result;
       notifyListeners();
     } catch (e) {
-      // Sem dados suficientes etc.: não tenta de novo; o técnico encerra à mão.
-      _autoStopGaveUp.add(sessionId);
-      debugPrint('Parada automática falhou: $e');
+      debugPrint('Parada automática erro na sessão $sessionId: $e');
     } finally {
       _autoStopBusy.remove(sessionId);
     }

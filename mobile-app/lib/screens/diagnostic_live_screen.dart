@@ -4,6 +4,7 @@ import '../engine/diagnostic_engine.dart';
 import '../main.dart';
 import '../models/bench_session.dart';
 import '../models/diagnostic_finding.dart';
+import '../state/bench_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/thermal_chart.dart';
 import 'test_report_screen.dart';
@@ -27,7 +28,10 @@ class _DiagnosticLiveScreenState extends State<DiagnosticLiveScreen> {
   void initState() {
     super.initState();
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        BenchScope.of(context).checkAutoStopNow();
+        setState(() {});
+      }
     });
   }
 
@@ -296,6 +300,50 @@ class _DiagnosticLiveScreenState extends State<DiagnosticLiveScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 110),
           children: [
+            if (session.targetReachedAt != null) ...[
+              Builder(builder: (context) {
+                final remaining = (BenchController.autoStopHold.inSeconds -
+                        DateTime.now().difference(session.targetReachedAt!).inSeconds)
+                    .clamp(0, BenchController.autoStopHold.inSeconds);
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.approved.withValues(alpha: 0.15),
+                    border: Border.all(color: AppColors.approved),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.check_circle_rounded,
+                          color: AppColors.approved, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          remaining > 0
+                              ? 'Meta de ${session.profile.targetTemperature.toStringAsFixed(1)}°C atingida! Concluindo ensaio em ${remaining}s...'
+                              : 'Meta atingida! Gerando laudo final...',
+                          style: const TextStyle(
+                            color: AppColors.approvedBright,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.approved,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+
             // Deck de Telemetria Obsidian
             Container(
               padding: const EdgeInsets.all(18),

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/sensor_reading.dart';
@@ -360,6 +359,9 @@ class WellingtonBleService {
     final latest = <String, LiveTelemetry>{};
     // Último pacote do fabricante (0x578) visto de cada sensor.
     final lastMfrAt = <String, DateTime>{};
+    DateTime lastYieldTime = DateTime.fromMillisecondsSinceEpoch(0);
+    DateTime lastPruneTime = DateTime.now();
+
     await FlutterBluePlus.startScan(
       continuousUpdates: true,
       androidScanMode: highFrequencyScan ? AndroidScanMode.lowLatency : AndroidScanMode.balanced,
@@ -375,17 +377,31 @@ class WellingtonBleService {
             androidUsesFineLocation: false,
           );
         } catch (e) {
-        debugPrint('BLE: falha ignorada: $e');
-      }
+          debugPrint('BLE: falha ignorada: $e');
+        }
       }
     });
     try {
       await for (final results in FlutterBluePlus.scanResults) {
+        final now = DateTime.now();
+
+        // Limpeza periódica (a cada 4s): remove sensores não vistos há > 25s
+        // para que sensores desligados ou distantes não fiquem presos na tela.
+        if (now.difference(lastPruneTime).inSeconds >= 4) {
+          lastPruneTime = now;
+          latest.removeWhere((id, item) {
+            if (now.difference(item.at).inSeconds > 25) {
+              lastMfrAt.remove(id);
+              return true;
+            }
+            return false;
+          });
+        }
+
         for (final r in results) {
           final w = r.advertisementData.manufacturerData[0x578];
           if (w == null && !_isWellingtonMonitor(r)) continue;
           final id = r.device.remoteId.str;
-          final now = DateTime.now();
           latest[id] = mergeAdvertisement(
             deviceId: id,
             prev: latest[id],
@@ -398,8 +414,14 @@ class WellingtonBleService {
           if (w != null) lastMfrAt[id] = now;
         }
         if (latest.isEmpty) continue;
-        final list = latest.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
-        yield list;
+
+        // Controle de cadência (throttle): emite atualizações a no máximo 1,2 Hz (~800ms)
+        // para a tela não tremer nem re-renderizar descontroladamente a cada pacote BLE cru.
+        if (now.difference(lastYieldTime).inMilliseconds >= 800) {
+          lastYieldTime = now;
+          final list = latest.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
+          yield list;
+        }
       }
     } finally {
       watchdog.cancel();
